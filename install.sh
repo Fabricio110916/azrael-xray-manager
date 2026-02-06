@@ -1,5 +1,28 @@
 #!/bin/bash
 
+# Cores
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Variáveis de caminho
+XRAY_BIN="/usr/local/bin/xray"
+XRAY_DIR="/etc/xray"
+CONFIG="$XRAY_DIR/config.json"
+SERVICE="/etc/systemd/system/xray.service"
+CERT_DIR="$XRAY_DIR/cert"
+DOMAIN_FILE="$XRAY_DIR/domain.txt"
+PROTOCOL_FILE="$XRAY_DIR/protocol.txt"
+CLIENTS_FILE="$XRAY_DIR/clients.json"
+
+# COMANDO DO SISTEMA
+MENU_CMD="/usr/local/bin/xray-menu"
+
+mkdir -p "$XRAY_DIR"
+
 # Banner de login SSH - VERSÃO CORRIGIDA
 install_login_banner() {
   # Limpar configurações antigas com erros primeiro
@@ -133,51 +156,13 @@ uninstall_script() {
   exit 0
 }
 
-XRAY_BIN="/usr/local/bin/xray"
-XRAY_DIR="/etc/xray"
-CONFIG="$XRAY_DIR/config.json"
-SERVICE="/etc/systemd/system/xray.service"
-CERT_DIR="$XRAY_DIR/cert"
-DOMAIN_FILE="$XRAY_DIR/domain.txt"
-PROTOCOL_FILE="$XRAY_DIR/protocol.txt"
-CLIENTS_FILE="$XRAY_DIR/clients.json"
-
-# COMANDO DO SISTEMA
-MENU_CMD="/usr/local/bin/xray-menu"
-
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-mkdir -p "$XRAY_DIR"
-
 # =========================
 # Instalar comando no sistema
 # =========================
 
 install_command() {
   # 1. Copiar script para /usr/local/bin
-  # Quando executado via curl, $0 é /dev/fd/63, então não podemos copiá-lo
-  # Em vez disso, vamos baixar novamente do GitHub ou salvar o script atual
-  if [ -f "$0" ] && [ "$0" != "/dev/fd/63" ] && [ "$0" != "/dev/stdin" ]; then
-    sudo cp "$0" "$MENU_CMD"
-  else
-    # Se executado via curl, criar um script básico ou baixar do GitHub
-    cat > /tmp/azrael-install.tmp << 'EOF'
-#!/bin/bash
-echo "Para executar o Azrael Xray Manager, use:"
-echo "xray-menu ou xm"
-echo ""
-echo "Se o comando não estiver disponível, instale com:"
-echo "bash <(curl -sL https://raw.githubusercontent.com/Fabricio110916/azrael-xray-manager/main/install.sh)"
-EOF
-    sudo cp /tmp/azrael-install.tmp "$MENU_CMD"
-    rm -f /tmp/azrael-install.tmp
-  fi
-  
+  sudo cp "$0" "$MENU_CMD"
   sudo chmod +x "$MENU_CMD"
   
   # 2. Criar atalho
@@ -194,109 +179,52 @@ EOF
 }
 
 # =========================
-# Instalação Automática (MODIFICADA PARA FUNCIONAR VIA CURL)
+# Instalação Automática
 # =========================
 
 auto_install_command() {
-  # Verificar se já está instalado
-  if [ -f "$MENU_CMD" ]; then
-    return
-  fi
-  
-  clear
-  printf "\033[0;35m"
-  printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
-  printf '██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║\n'
-  printf '███████║  ███╔╝ ██████╔╝███████║█████╗  ██║\n'
-  printf '██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║\n'
-  printf '██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗\n'
-  printf '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝\n'
-  printf "\033[0m"
-  
-  printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
-  printf "\033[1;32m      AZRAEL XRAY MANAGER - INSTALAÇÃO${NC}\n"
-  printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
-  echo ""
-  echo -e "${YELLOW}Este script instalará:${NC}"
-  echo "1. Comando 'xray-menu' e 'xm'"
-  echo "2. Banner de login personalizado"
-  echo "3. Aliases no .bashrc"
-  echo ""
-  
-  read -p "Deseja instalar? (s/N): " RESPONSE
-  if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
-    echo -e "${CYAN}Instalando...${NC}"
+  if [ ! -f "$MENU_CMD" ] && [[ "$0" == "./"* ]]; then
+    clear
+    printf "\033[0;35m"
+    printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
+    printf '██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║\n'
+    printf '███████║  ███╔╝ ██████╔╝███████║█████╗  ██║\n'
+    printf '██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║\n'
+    printf '██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗\n'
+    printf '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝\n'
+    printf "\033[0m"
     
-    # Baixar script completo do GitHub para instalação
-    TEMP_SCRIPT=$(mktemp)
-    echo -e "${CYAN}Baixando script completo...${NC}"
+    printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
+    printf "\033[1;32m      AZRAEL XRAY MANAGER\033[0m\n"
+    printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
+    echo ""
     
-    # Tentar baixar do GitHub
-    if curl -sL "https://raw.githubusercontent.com/Fabricio110916/azrael-xray-manager/main/install.sh" -o "$TEMP_SCRIPT"; then
-      echo -e "${GREEN}✓ Script baixado com sucesso${NC}"
-      chmod +x "$TEMP_SCRIPT"
-      
-      # Criar diretório se não existir
-      mkdir -p /usr/local/bin
-      
-      # Copiar script para localização final
-      sudo cp "$TEMP_SCRIPT" "$MENU_CMD"
-      sudo chmod +x "$MENU_CMD"
-      
-      # Criar atalho
-      sudo ln -sf "$MENU_CMD" /usr/local/bin/xm 2>/dev/null || true
-      
-      # Instalar banner
-      install_login_banner
-      
-      echo -e "${GREEN}✓ Instalação completa!${NC}"
+    read -p "Instalar? (s/N): " RESPONSE
+    if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
+      install_command
       echo ""
-      echo -e "${CYAN}Use o comando:${NC}"
-      echo -e "  ${GREEN}xray-menu${NC}   ou   ${GREEN}xm${NC}"
-      echo ""
-      
-      # Limpar arquivo temporário
-      rm -f "$TEMP_SCRIPT"
-      
-      # Perguntar se quer executar agora
-      read -p "Deseja executar o menu agora? (s/N): " RUN_NOW
-      if [[ "$RUN_NOW" =~ ^[Ss]$ ]]; then
-        exec sudo xray-menu
-      fi
-      
       exit 0
     else
-      echo -e "${RED}✗ Erro ao baixar o script${NC}"
-      echo -e "${YELLOW}Tentando instalação local...${NC}"
-      install_command
+      echo -e "${RED}Cancelado${NC}"
+      exit 1
     fi
-  else
-    echo -e "${RED}Instalação cancelada${NC}"
-    exit 1
   fi
 }
 
 # =========================
-# Verificar modo de execução (MODIFICADO)
+# Verificar modo de execução
 # =========================
 
-# Se executado diretamente como xray-menu ou xm
 if [[ "$0" =~ /xray-menu$ ]] || [[ "$0" =~ /xm$ ]]; then
   if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Execute como root:${NC}"
     echo -e "${CYAN}sudo xray-menu${NC}"
     exec sudo "$0" "$@"
   fi
-  # Continuar para o menu principal
 fi
 
-# Se executado via curl (auto-instalação)
-if [ "$1" != "--no-auto-install" ]; then
-  # Verificar se estamos em um terminal interativo
-  if [ -t 0 ] && [ ! -f "$MENU_CMD" ]; then
-    auto_install_command
-  fi
-fi
+# Executar auto-instalação
+auto_install_command
 
 # =========================
 # Utils
@@ -675,7 +603,7 @@ show_client_link() {
 }
 
 # =========================
-# Mostrar link VLESS (FUNÇÃO CORRIGIDA)
+# Mostrar link VLESS
 # =========================
 show_vless_link() {
   if [ ! -f "$CONFIG" ]; then
@@ -1418,13 +1346,6 @@ show_status() {
 # =========================
 
 main_menu() {
-  # Verificar se é root
-  if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Este menu deve ser executado como root${NC}"
-    echo -e "${CYAN}Use: sudo xray-menu${NC}"
-    exec sudo "$0" "$@"
-  fi
-  
   while true; do
     clear
     echo "═══════════════════════════════════════════════"
@@ -1472,24 +1393,4 @@ main_menu() {
 # Executar
 # =========================
 
-# Se executado diretamente (não via source)
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  # Verificar se é para instalar ou executar menu
-  if [[ "$1" == "install" ]] || [[ "$1" == "--install" ]]; then
-    auto_install_command
-  else
-    # Se o comando já estiver instalado, executar menu
-    if [ -f "$MENU_CMD" ]; then
-      main_menu
-    else
-      # Se não estiver instalado e for execução interativa, perguntar
-      if [ -t 0 ]; then
-        auto_install_command
-      else
-        echo -e "${YELLOW}Para instalar o Azrael Xray Manager, execute:${NC}"
-        echo -e "${CYAN}bash <(curl -sL https://raw.githubusercontent.com/Fabricio110916/azrael-xray-manager/main/install.sh)${NC}"
-        exit 1
-      fi
-    fi
-  fi
-fi
+main_menu
