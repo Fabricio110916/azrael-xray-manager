@@ -1,1396 +1,1112 @@
 #!/bin/bash
 
-# Cores
-GREEN='\033[0;32m'
+# ============================================================================
+# AZRAEL XRAY MANAGER + WEB SOCKET SSH PROXY
+# Instalação completa e automática
+# ============================================================================
+
+# Cores para output
 RED='\033[0;31m'
-CYAN='\033[0;36m'
+GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
 
-# Variáveis de caminho
-XRAY_BIN="/usr/local/bin/xray"
-XRAY_DIR="/etc/xray"
-CONFIG="$XRAY_DIR/config.json"
-SERVICE="/etc/systemd/system/xray.service"
-CERT_DIR="$XRAY_DIR/cert"
-DOMAIN_FILE="$XRAY_DIR/domain.txt"
-PROTOCOL_FILE="$XRAY_DIR/protocol.txt"
-CLIENTS_FILE="$XRAY_DIR/clients.json"
+# Variáveis globais
+VERSION="2.0.0"
+INSTALL_DIR="/opt/azrael-manager"
+CONFIG_DIR="/etc/azrael"
+LOG_DIR="/var/log/azrael"
+SERVICE_USER="azrael"
+WS_PROXY_PORT="8081"
+SSH_PORT="22"
 
-# COMANDO DO SISTEMA
-MENU_CMD="/usr/local/bin/xray-menu"
-
-mkdir -p "$XRAY_DIR"
-
-# Banner de login SSH - VERSÃO CORRIGIDA
-install_login_banner() {
-  # Limpar configurações antigas com erros primeiro
-  sed -i '/if \[ -f \/etc\/profile.d\/azrael-banner.sh \]; then/,/^fi$/d' /root/.bashrc ~/.bashrc 2>/dev/null
-  sed -i '/AZRAEL XRAY MANAGER/d' /root/.bashrc ~/.bashrc 2>/dev/null
-  sed -i '/azrael-banner/d' /root/.bashrc ~/.bashrc 2>/dev/null
-  
-  # 1. Criar banner no profile.d
-  cat << 'EOF' > /etc/profile.d/azrael-banner.sh
-#!/bin/bash
-
-# AZRAEL XRAY MANAGER - BANNER MÍNIMO
-
-# Verificar se é shell interativo
-if [[ $- == *i* ]] && [ -n "$PS1" ]; then
-  # Aguardar terminal carregar
-  sleep 0.1
-  
-  # Limpar tela
-  clear 2>/dev/null || printf "\033c"
-  
-  # Banner colorido - CORRETO
-  printf "\033[0;35m"
-  printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
-  printf '██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║\n'
-  printf '███████║  ███╔╝ ██████╔╝███████║█████╗  ██║\n'
-  printf '██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║\n'
-  printf '██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗\n'
-  printf '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝\n'
-  printf "\033[0m"
-  
-  printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
-  printf "\033[1;32m     AZRAEL XRAY MANAGER\033[0m\n"
-  printf "\033[1;33m     Comandos: xray-menu ou xm\033[0m\n"
-  printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
-fi
-EOF
-
-  chmod +x /etc/profile.d/azrael-banner.sh
-  
-  # 2. Configurar .bashrc do usuário atual - SEM ERROS
-  USER_BASHRC="$HOME/.bashrc"
-  if [ -f "$USER_BASHRC" ]; then
-    echo "" >> "$USER_BASHRC"
-    echo "# AZRAEL XRAY MANAGER - BANNER" >> "$USER_BASHRC"
-    echo "if [ -f /etc/profile.d/azrael-banner.sh ]; then" >> "$USER_BASHRC"
-    echo "    if [ -z \"\$AZRAEL_BANNER_SHOWN\" ]; then" >> "$USER_BASHRC"
-    echo "        . /etc/profile.d/azrael-banner.sh" >> "$USER_BASHRC"
-    echo "        export AZRAEL_BANNER_SHOWN=1" >> "$USER_BASHRC"
-    echo "    fi" >> "$USER_BASHRC"
-    echo "fi" >> "$USER_BASHRC"
-    echo "" >> "$USER_BASHRC"
-    echo "# Aliases" >> "$USER_BASHRC"
-    echo "alias xray-menu='sudo /usr/local/bin/xray-menu'" >> "$USER_BASHRC"
-    echo "alias xm='sudo /usr/local/bin/xray-menu'" >> "$USER_BASHRC"
-  fi
-  
-  # 3. Configurar .bashrc do root - SEM ERROS
-  ROOT_BASHRC="/root/.bashrc"
-  if [ -f "$ROOT_BASHRC" ]; then
-    echo "" >> "$ROOT_BASHRC"
-    echo "# AZRAEL XRAY MANAGER - BANNER" >> "$ROOT_BASHRC"
-    echo "if [ -f /etc/profile.d/azrael-banner.sh ]; then" >> "$ROOT_BASHRC"
-    echo "    if [ -z \"\$AZRAEL_BANNER_SHOWN\" ]; then" >> "$ROOT_BASHRC"
-    echo "        . /etc/profile.d/azrael-banner.sh" >> "$ROOT_BASHRC"
-    echo "        export AZRAEL_BANNER_SHOWN=1" >> "$ROOT_BASHRC"
-    echo "    fi" >> "$ROOT_BASHRC"
-    echo "fi" >> "$ROOT_BASHRC"
-    echo "" >> "$ROOT_BASHRC"
-    echo "# Aliases" >> "$ROOT_BASHRC"
-    echo "alias xray-menu='/usr/local/bin/xray-menu'" >> "$ROOT_BASHRC"
-    echo "alias xm='/usr/local/bin/xray-menu'" >> "$ROOT_BASHRC"
-  fi
-  
-  # 4. Configurar MOTD simples
-  cat << 'EOF' > /etc/motd
-
-AZRAEL XRAY MANAGER
-Use: xray-menu ou xm
-EOF
-}
-
-# =========================
-# Função para desinstalar - SIMPLIFICADA
-# =========================
-
-uninstall_script() {
-  echo -e "${RED}=== DESINSTALAR TUDO ===${NC}"
-  echo ""
-  
-  read -p "Confirmar remoção completa? (s/N): " RESPONSE
-  if [[ ! "$RESPONSE" =~ ^[Ss]$ ]]; then
-    echo -e "${GREEN}Cancelado${NC}"
-    return
-  fi
-  
-  echo -e "${CYAN}Removendo...${NC}"
-  
-  # Parar serviços
-  systemctl stop xray 2>/dev/null
-  systemctl disable xray 2>/dev/null
-  
-  # Remover comandos
-  rm -f /usr/local/bin/xray-menu /usr/local/bin/xm 2>/dev/null
-  
-  # Remover banner
-  rm -f /etc/profile.d/azrael-banner.sh /etc/motd 2>/dev/null
-  
-  # Limpar .bashrc - remover apenas nossas linhas
-  sed -i '/# AZRAEL XRAY MANAGER - BANNER/,/^fi$/d' ~/.bashrc 2>/dev/null
-  sed -i '/alias xray-menu/d' ~/.bashrc 2>/dev/null
-  sed -i '/alias xm/d' ~/.bashrc 2>/dev/null
-  
-  sed -i '/# AZRAEL XRAY MANAGER - BANNER/,/^fi$/d' /root/.bashrc 2>/dev/null
-  sed -i '/alias xray-menu/d' /root/.bashrc 2>/dev/null
-  sed -i '/alias xm/d' /root/.bashrc 2>/dev/null
-  
-  # Remover tudo do Xray
-  rm -f /etc/systemd/system/xray.service 2>/dev/null
-  rm -f /usr/local/bin/xray 2>/dev/null
-  rm -rf /etc/xray 2>/dev/null
-  rm -rf /root/.acme.sh 2>/dev/null
-  
-  # Recarregar systemd
-  systemctl daemon-reload 2>/dev/null
-  
-  echo ""
-  echo -e "${GREEN}✅ Tudo removido!${NC}"
-  echo ""
-  
-  exit 0
-}
-
-# =========================
-# Instalar comando no sistema
-# =========================
-
-install_command() {
-  # 1. Copiar script para /usr/local/bin
-  sudo cp "$0" "$MENU_CMD"
-  sudo chmod +x "$MENU_CMD"
-  
-  # 2. Criar atalho
-  sudo ln -sf "$MENU_CMD" /usr/local/bin/xm 2>/dev/null || true
-  
-  # 3. Instalar banner de login
-  install_login_banner
-  
-  echo -e "${GREEN} Instalação completa!${NC}"
-  echo ""
-  echo -e "${CYAN}Use o comando:${NC}"
-  echo -e "  ${GREEN}xray-menu${NC}   ou   ${GREEN}xm${NC}"
-  echo ""
-}
-
-# =========================
-# Instalação Automática
-# =========================
-
-auto_install_command() {
-  if [ ! -f "$MENU_CMD" ] && [[ "$0" == "./"* ]]; then
+# Banner
+print_banner() {
     clear
-    printf "\033[0;35m"
-    printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
-    printf '██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║\n'
-    printf '███████║  ███╔╝ ██████╔╝███████║█████╗  ██║\n'
-    printf '██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║\n'
-    printf '██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗\n'
-    printf '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝\n'
-    printf "\033[0m"
-    
-    printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
-    printf "\033[1;32m      AZRAEL XRAY MANAGER\033[0m\n"
-    printf "\033[1;36m═══════════════════════════════════════════════\033[0m\n"
-    echo ""
-    
-    read -p "Instalar? (s/N): " RESPONSE
-    if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
-      install_command
-      echo ""
-      exit 0
-    else
-      echo -e "${RED}Cancelado${NC}"
-      exit 1
-    fi
-  fi
-}
-
-# =========================
-# Verificar modo de execução
-# =========================
-
-if [[ "$0" =~ /xray-menu$ ]] || [[ "$0" =~ /xm$ ]]; then
-  if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Execute como root:${NC}"
-    echo -e "${CYAN}sudo xray-menu${NC}"
-    exec sudo "$0" "$@"
-  fi
-fi
-
-# Executar auto-instalação
-auto_install_command
-
-# =========================
-# Utils
-# =========================
-
-init_clients_file() {
-  if [ ! -f "$CLIENTS_FILE" ]; then
-    cat >"$CLIENTS_FILE" <<EOF
-{
-  "clients": []
-}
+    echo -e "${PURPLE}"
+    cat << "EOF"
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                                                              ║
+    ║     █████╗ ███████╗██████╗  █████╗ ███████╗██╗              ║
+    ║    ██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║              ║
+    ║    ███████║  ███╔╝ ██████╔╝███████║█████╗  ██║              ║
+    ║    ██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║              ║
+    ║    ██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗         ║
+    ║    ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝         ║
+    ║                                                              ║
+    ║                XRAY MANAGER + WS SSH PROXY                   ║
+    ║                    Version: $VERSION                         ║
+    ║                                                              ║
+    ╚══════════════════════════════════════════════════════════════╝
 EOF
-  fi
+    echo -e "${NC}"
+    echo -e "${CYAN}================================================================================${NC}"
+    echo -e "${YELLOW}Instalação completa: Xray-core + WebSocket SSH Proxy + Gerenciamento${NC}"
+    echo -e "${CYAN}================================================================================${NC}"
+    echo ""
 }
 
-get_current_protocol() {
-  if [ -f "$PROTOCOL_FILE" ]; then
-    cat "$PROTOCOL_FILE"
-  else
-    if [ -f "$CONFIG" ]; then
-      jq -r '.inbounds[0].streamSettings.network' "$CONFIG" 2>/dev/null || echo ""
+# Função para mostrar status
+print_status() {
+    echo -e "${BLUE}[*]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[✓]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[✗]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
+
+# Verificar se é root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "Este script deve ser executado como root!"
+        echo "Use: sudo $0"
+        exit 1
     fi
-  fi
 }
 
-get_tls_mode() {
-  if [ ! -f "$CONFIG" ]; then
-    echo "none"
-    return
-  fi
-  jq -r '.inbounds[0].streamSettings.security // "none"' "$CONFIG"
-}
-
-get_config_value() {
-  local key="$1"
-  jq -r "$key" "$CONFIG" 2>/dev/null
-}
-
-detect_arch() {
-  case "$(uname -m)" in
-    x86_64) echo "64" ;;
-    aarch64|arm64) echo "arm64-v8a" ;;
-    armv7*) echo "arm32-v7a" ;;
-    *) echo "unsupported" ;;
-  esac
-}
-
-check_domain_dns() {
-  local domain="$1"
-  
-  SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org || echo "")
-  [ -z "$SERVER_IP" ] && return 0
-  
-  DOMAIN_IP=$(dig +short "$domain" | head -1)
-  
-  if [ "$DOMAIN_IP" = "$SERVER_IP" ]; then
-    echo -e "${GREEN}✓ DNS OK${NC}"
-    return 0
-  else
-    echo -e "${YELLOW}⚠️  DNS não configurado${NC}"
-    echo -e "IP servidor: $SERVER_IP"
-    echo -e "IP domínio: $DOMAIN_IP"
+# Verificar sistema
+check_system() {
+    print_status "Verificando sistema..."
     
-    read -p "Continuar? (s/N): " RESPONSE
-    if [[ ! "$RESPONSE" =~ ^[Ss]$ ]]; then
-      return 1
-    fi
-    return 0
-  fi
-}
-
-clean_old_certificates() {
-  local domain="$1"
-  
-  if [ -d "/root/.acme.sh" ]; then
-    echo -e "${CYAN}Limpando certificados...${NC}"
-    
-    if /root/.acme.sh/acme.sh --list | grep -q "$domain"; then
-      /root/.acme.sh/acme.sh --revoke -d "$domain" --ecc >/dev/null 2>&1 || true
+    # Verificar OS
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        OS=$ID
+        VER=$VERSION_ID
+    else
+        print_error "Não foi possível detectar o sistema operacional"
+        exit 1
     fi
     
-    rm -rf "/root/.acme.sh/${domain}_ecc" >/dev/null 2>&1 || true
+    print_success "Sistema: $OS $VER"
     
-    if [ -f "/root/.acme.sh/account.conf" ]; then
-      sed -i "/$domain/d" "/root/.acme.sh/account.conf" 2>/dev/null || true
-    fi
-  fi
-  
-  rm -rf "$CERT_DIR"/* >/dev/null 2>&1 || true
-}
-
-# =========================
-# Sistema de Clientes
-# =========================
-
-add_client() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== ADICIONAR CLIENTE ===${NC}"
-  
-  read -p "Nome: " CLIENT_NAME
-  [ -z "$CLIENT_NAME" ] && { echo -e "${RED}Nome obrigatório${NC}"; return; }
-  
-  if jq -e --arg name "$CLIENT_NAME" '.clients[] | select(.name == $name)' "$CLIENTS_FILE" >/dev/null 2>&1; then
-    echo -e "${RED}Cliente já existe${NC}"
-    return
-  fi
-  
-  CLIENT_UUID=$(uuidgen)
-  
-  read -p "Limite (GB) [0=ilimitado]: " DATA_LIMIT_GB
-  DATA_LIMIT_GB=${DATA_LIMIT_GB:-0}
-  
-  if [ "$DATA_LIMIT_GB" -gt 0 ]; then
-    DATA_LIMIT_BYTES=$((DATA_LIMIT_GB * 1024 * 1024 * 1024))
-  else
-    DATA_LIMIT_BYTES=0
-  fi
-  
-  read -p "Expira (YYYY-MM-DD) [enter=sem]: " EXPIRE_DATE
-  
-  CLIENT_EMAIL="${CLIENT_NAME,,}@xray.local"
-  
-  jq --arg name "$CLIENT_NAME" \
-     --arg uuid "$CLIENT_UUID" \
-     --arg email "$CLIENT_EMAIL" \
-     --argjson limit "$DATA_LIMIT_BYTES" \
-     --arg expire "$EXPIRE_DATE" \
-     '.clients += [{
-        "name": $name,
-        "uuid": $uuid,
-        "email": $email,
-        "data_limit": $limit,
-        "expire_date": $expire,
-        "created_at": "'$(date +%Y-%m-%d)'",
-        "enabled": true,
-        "used_bytes": 0
-     }]' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  
-  echo -e "${GREEN}Cliente criado!${NC}"
-  echo -e "UUID: ${CYAN}$CLIENT_UUID${NC}"
-  
-  update_xray_config
-}
-
-list_clients() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== CLIENTES ===${NC}\n"
-  
-  local clients_count=$(jq '.clients | length' "$CLIENTS_FILE")
-  
-  if [ "$clients_count" -eq 0 ]; then
-    echo -e "${YELLOW}Nenhum cliente${NC}"
-    return
-  fi
-  
-  printf "${BLUE}%-20s %-10s %-12s %-8s${NC}\n" \
-    "Nome" "Limite(GB)" "Expiração" "Status"
-  echo "--------------------------------------------------"
-  
-  jq -r '.clients[] | 
-    [.name, 
-     (if .data_limit > 0 then (.data_limit / (1024*1024*1024) | tostring) else "∞" end),
-     (.expire_date // "∞"),
-     (if .enabled then "✅" else "❌" end)
-    ] | @tsv' "$CLIENTS_FILE" | while IFS=$'\t' read -r name limit expire status; do
-    printf "%-20s %-10s %-12s %-8s\n" \
-      "$name" "$limit" "$expire" "$status"
-  done
-  
-  echo ""
-  echo -e "${GREEN}Total: $clients_count cliente(s)${NC}"
-}
-
-delete_client() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== DELETAR CLIENTE ===${NC}"
-  list_clients
-  
-  read -p "UUID ou nome: " CLIENT_ID
-  
-  if [ -z "$CLIENT_ID" ]; then
-    echo -e "${RED}UUID/nome não informado${NC}"
-    return
-  fi
-  
-  CLIENT_INFO=$(jq --arg id "$CLIENT_ID" '.clients[] | select(.uuid == $id or .name == $id)' "$CLIENTS_FILE")
-  
-  if [ -z "$CLIENT_INFO" ]; then
-    echo -e "${RED}Cliente não encontrado${NC}"
-    return
-  fi
-  
-  CLIENT_NAME=$(echo "$CLIENT_INFO" | jq -r '.name')
-  
-  read -p "Confirmar exclusão de '$CLIENT_NAME'? (s/N): " CONFIRM
-  if [[ ! "$CONFIRM" =~ ^[Ss]$ ]]; then
-    echo "Cancelado"
-    return
-  fi
-  
-  jq --arg id "$CLIENT_ID" \
-     '[.clients[] | select(.uuid != $id and .name != $id)] as $new_clients |
-      .clients = $new_clients' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  
-  echo -e "${GREEN}Cliente deletado${NC}"
-  update_xray_config
-}
-
-toggle_client() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== ATIVAR/DESATIVAR ===${NC}"
-  list_clients
-  
-  read -p "UUID ou nome: " CLIENT_ID
-  
-  if [ -z "$CLIENT_ID" ]; then
-    echo -e "${RED}UUID/nome não informado${NC}"
-    return
-  fi
-  
-  CURRENT_STATUS=$(jq --arg id "$CLIENT_ID" '.clients[] | select(.uuid == $id or .name == $id) | .enabled' "$CLIENTS_FILE")
-  
-  if [ -z "$CURRENT_STATUS" ]; then
-    echo -e "${RED}Cliente não encontrado${NC}"
-    return
-  fi
-  
-  NEW_STATUS="false"
-  ACTION="desativado"
-  if [ "$CURRENT_STATUS" = "false" ]; then
-    NEW_STATUS="true"
-    ACTION="ativado"
-  fi
-  
-  jq --arg id "$CLIENT_ID" \
-     --argjson status "$NEW_STATUS" \
-     '.clients[] |= if (.uuid == $id or .name == $id) then .enabled = $status else . end' \
-     "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  
-  echo -e "${GREEN}Cliente $ACTION${NC}"
-  update_xray_config
-}
-
-update_client_expiry() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== ATUALIZAR EXPIRAÇÃO ===${NC}"
-  list_clients
-  
-  read -p "UUID ou nome: " CLIENT_ID
-  
-  if [ -z "$CLIENT_ID" ]; then
-    echo -e "${RED}UUID/nome não informado${NC}"
-    return
-  fi
-  
-  read -p "Nova data (YYYY-MM-DD) [enter=sem]: " NEW_DATE
-  
-  jq --arg id "$CLIENT_ID" \
-     --arg date "$NEW_DATE" \
-     '.clients[] |= if (.uuid == $id or .name == $id) then .expire_date = $date else . end' \
-     "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  
-  echo -e "${GREEN}Data atualizada${NC}"
-}
-
-update_client_limit() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== ATUALIZAR LIMITE ===${NC}"
-  list_clients
-  
-  read -p "UUID ou nome: " CLIENT_ID
-  
-  if [ -z "$CLIENT_ID" ]; then
-    echo -e "${RED}UUID/nome não informado${NC}"
-    return
-  fi
-  
-  read -p "Novo limite (GB) [0=ilimitado]: " NEW_LIMIT_GB
-  NEW_LIMIT_GB=${NEW_LIMIT_GB:-0}
-  
-  if [ "$NEW_LIMIT_GB" -gt 0 ]; then
-    NEW_LIMIT_BYTES=$((NEW_LIMIT_GB * 1024 * 1024 * 1024))
-  else
-    NEW_LIMIT_BYTES=0
-  fi
-  
-  jq --arg id "$CLIENT_ID" \
-     --argjson limit "$NEW_LIMIT_BYTES" \
-     '.clients[] |= if (.uuid == $id or .name == $id) then .data_limit = $limit else . end' \
-     "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  
-  echo -e "${GREEN}Limite atualizado${NC}"
-}
-
-show_client_link() {
-  init_clients_file
-  
-  echo -e "${CYAN}=== GERAR LINK ===${NC}"
-  list_clients
-  
-  read -p "UUID ou nome: " CLIENT_ID
-  
-  if [ -z "$CLIENT_ID" ]; then
-    echo -e "${RED}UUID/nome não informado${NC}"
-    return
-  fi
-  
-  CLIENT_INFO=$(jq --arg id "$CLIENT_ID" '.clients[] | select(.uuid == $id or .name == $id)' "$CLIENTS_FILE")
-  
-  if [ -z "$CLIENT_INFO" ]; then
-    echo -e "${RED}Cliente não encontrado${NC}"
-    return
-  fi
-  
-  CLIENT_UUID=$(echo "$CLIENT_INFO" | jq -r '.uuid')
-  CLIENT_NAME=$(echo "$CLIENT_INFO" | jq -r '.name')
-  
-  CURRENT_PROTO=$(get_current_protocol)
-  TLS_MODE=$(get_tls_mode)
-  PORT=$(get_config_value '.inbounds[0].port')
-  
-  [ -z "$CURRENT_PROTO" ] && { echo -e "${RED}Protocolo não configurado${NC}"; return; }
-  
-  echo ""
-  echo -e "${GREEN}Cliente: $CLIENT_NAME${NC}"
-  echo ""
-  
-  if [ "$TLS_MODE" = "tls" ] && [ -f "$DOMAIN_FILE" ]; then
-    DOMAIN=$(cat "$DOMAIN_FILE")
-    
-    case $CURRENT_PROTO in
-      ws)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.wsSettings.path')
-        echo "vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=ws&path=${PATHX}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      xhttp)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.xhttpSettings.path')
-        echo "vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=xhttp&path=${PATHX}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      grpc)
-        SERVICE_NAME=$(get_config_value '.inbounds[0].streamSettings.grpcSettings.serviceName')
-        echo "vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=grpc&serviceName=${SERVICE_NAME}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      tcp)
-        echo "vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=tcp&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
+    # Verificar arquitetura
+    ARCH=$(uname -m)
+    case $ARCH in
+        x86_64)
+            ARCH="amd64"
+            ;;
+        aarch64|arm64)
+            ARCH="arm64"
+            ;;
+        armv7l)
+            ARCH="armv7"
+            ;;
+        *)
+            print_error "Arquitetura não suportada: $ARCH"
+            exit 1
+            ;;
     esac
-  else
-    IP=$(curl -s --max-time 5 https://api.ipify.org || echo "IP_DESCONHECIDO")
+    print_success "Arquitetura: $ARCH"
     
-    case $CURRENT_PROTO in
-      ws)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.wsSettings.path')
-        echo "vless://${CLIENT_UUID}@${IP}:${PORT}?type=ws&path=${PATHX}&security=none#${CLIENT_NAME}"
-        ;;
-      xhttp)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.xhttpSettings.path')
-        echo "vless://${CLIENT_UUID}@${IP}:${PORT}?type=xhttp&path=${PATHX}&security=none#${CLIENT_NAME}"
-        ;;
-      grpc)
-        SERVICE_NAME=$(get_config_value '.inbounds[0].streamSettings.grpcSettings.serviceName')
-        echo "vless://${CLIENT_UUID}@${IP}:${PORT}?type=grpc&serviceName=${SERVICE_NAME}&security=none#${CLIENT_NAME}"
-        ;;
-      tcp)
-        echo "vless://${CLIENT_UUID}@${IP}:${PORT}?type=tcp&security=none#${CLIENT_NAME}"
-        ;;
-    esac
-  fi
-  echo ""
+    # Verificar dependências básicas
+    for cmd in curl wget git systemctl; do
+        if ! command -v $cmd &> /dev/null; then
+            print_warning "$cmd não encontrado, instalando..."
+            apt update && apt install -y $cmd
+        fi
+    done
 }
 
-# =========================
-# Mostrar link VLESS
-# =========================
-show_vless_link() {
-  if [ ! -f "$CONFIG" ]; then
-    echo -e "${RED}Xray não está configurado!${NC}"
-    return 1
-  fi
-  
-  echo -e "${CYAN}=== GERAR LINK VLESS ===${NC}"
-  
-  # Obter informações da configuração
-  PORT=$(get_config_value '.inbounds[0].port')
-  CURRENT_PROTO=$(get_current_protocol)
-  TLS_MODE=$(get_tls_mode)
-  
-  if [ "$TLS_MODE" = "tls" ] && [ -f "$DOMAIN_FILE" ]; then
-    DOMAIN=$(cat "$DOMAIN_FILE")
-    echo -e "${GREEN}Modo: TLS (Domain: $DOMAIN)${NC}"
-  else
-    DOMAIN=$(curl -s --max-time 5 https://api.ipify.org || echo "IP_PÚBLICO")
-    echo -e "${YELLOW}Modo: Sem TLS (IP: $DOMAIN)${NC}"
-  fi
-  
-  echo -e "${CYAN}Protocolo: $CURRENT_PROTO${NC}"
-  echo -e "${CYAN}Porta: $PORT${NC}"
-  echo ""
-  
-  # Listar clientes para seleção
-  init_clients_file
-  local clients_count=$(jq '.clients | length' "$CLIENTS_FILE")
-  
-  if [ "$clients_count" -eq 0 ]; then
-    echo -e "${YELLOW}Nenhum cliente configurado.${NC}"
-    read -p "Deseja criar um cliente agora? (s/N): " RESPONSE
-    if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
-      add_client
+# Criar estrutura de diretórios
+create_directories() {
+    print_status "Criando estrutura de diretórios..."
+    
+    mkdir -p $INSTALL_DIR
+    mkdir -p $CONFIG_DIR
+    mkdir -p $LOG_DIR
+    mkdir -p $INSTALL_DIR/scripts
+    mkdir -p $INSTALL_DIR/proxy
+    mkdir -p $INSTALL_DIR/xray
+    
+    # Criar usuário para serviços
+    if ! id "$SERVICE_USER" &>/dev/null; then
+        useradd -r -s /bin/false -d $INSTALL_DIR $SERVICE_USER
     fi
-    return
-  fi
-  
-  echo -e "${CYAN}Clientes disponíveis:${NC}"
-  echo ""
-  
-  jq -r '.clients[] | "\(.name) - \(.uuid) - \(if .enabled then "✅" else "❌" end)"' "$CLIENTS_FILE" | nl -w 2 -s ') '
-  echo ""
-  
-  read -p "Selecione o número do cliente ou digite o UUID: " CLIENT_SELECTION
-  
-  if [ -z "$CLIENT_SELECTION" ]; then
-    echo -e "${RED}Seleção cancelada${NC}"
-    return
-  fi
-  
-  # Verificar se é um número
-  if [[ "$CLIENT_SELECTION" =~ ^[0-9]+$ ]]; then
-    CLIENT_UUID=$(jq -r ".clients[$((CLIENT_SELECTION-1))].uuid" "$CLIENTS_FILE" 2>/dev/null)
-  else
-    CLIENT_UUID="$CLIENT_SELECTION"
-  fi
-  
-  if [ -z "$CLIENT_UUID" ] || [ "$CLIENT_UUID" = "null" ]; then
-    echo -e "${RED}Cliente não encontrado${NC}"
-    return
-  fi
-  
-  # Obter informações do cliente
-  CLIENT_INFO=$(jq --arg uuid "$CLIENT_UUID" '.clients[] | select(.uuid == $uuid)' "$CLIENTS_FILE")
-  
-  if [ -z "$CLIENT_INFO" ]; then
-    echo -e "${RED}Cliente não encontrado${NC}"
-    return
-  fi
-  
-  CLIENT_NAME=$(echo "$CLIENT_INFO" | jq -r '.name')
-  CLIENT_ENABLED=$(echo "$CLIENT_INFO" | jq -r '.enabled')
-  
-  if [ "$CLIENT_ENABLED" = "false" ]; then
-    echo -e "${YELLOW}Este cliente está desativado.${NC}"
-    read -p "Deseja ativá-lo? (s/N): " RESPONSE
-    if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
-      toggle_client
+    
+    # Ajustar permissões
+    chown -R $SERVICE_USER:$SERVICE_USER $INSTALL_DIR $CONFIG_DIR $LOG_DIR
+    chmod 750 $INSTALL_DIR $CONFIG_DIR $LOG_DIR
+    
+    print_success "Estrutura de diretórios criada"
+}
+
+# Instalar Xray-core
+install_xray() {
+    print_status "Instalando Xray-core..."
+    
+    # URL do Xray
+    XRAY_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-$ARCH.zip"
+    
+    # Baixar e instalar
+    cd /tmp
+    wget -q $XRAY_URL -O xray.zip
+    if [[ $? -ne 0 ]]; then
+        print_error "Falha ao baixar Xray-core"
+        return 1
     fi
-  fi
-  
-  echo ""
-  echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}LINK VLESS PARA: $CLIENT_NAME${NC}"
-  echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
-  echo ""
-  
-  # Gerar link baseado no protocolo
-  if [ "$TLS_MODE" = "tls" ] && [ -f "$DOMAIN_FILE" ]; then
-    DOMAIN=$(cat "$DOMAIN_FILE")
     
-    case $CURRENT_PROTO in
-      ws)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.wsSettings.path')
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=ws&path=${PATHX}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      xhttp)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.xhttpSettings.path')
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=xhttp&path=${PATHX}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      grpc)
-        SERVICE_NAME=$(get_config_value '.inbounds[0].streamSettings.grpcSettings.serviceName')
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=grpc&serviceName=${SERVICE_NAME}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      tcp)
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=tcp&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-      *)
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
-        ;;
-    esac
-  else
-    DOMAIN=$(curl -s --max-time 5 https://api.ipify.org || echo "IP_PÚBLICO")
+    unzip -q xray.zip
+    install -m 755 xray /usr/local/bin/xray
+    install -m 644 geoip.dat /usr/local/bin/geoip.dat
+    install -m 644 geosite.dat /usr/local/bin/geosite.dat
     
-    case $CURRENT_PROTO in
-      ws)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.wsSettings.path')
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=ws&path=${PATHX}&security=none#${CLIENT_NAME}"
-        ;;
-      xhttp)
-        PATHX=$(get_config_value '.inbounds[0].streamSettings.xhttpSettings.path')
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=xhttp&path=${PATHX}&security=none#${CLIENT_NAME}"
-        ;;
-      grpc)
-        SERVICE_NAME=$(get_config_value '.inbounds[0].streamSettings.grpcSettings.serviceName')
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=grpc&serviceName=${SERVICE_NAME}&security=none#${CLIENT_NAME}"
-        ;;
-      tcp)
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=tcp&security=none#${CLIENT_NAME}"
-        ;;
-      *)
-        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?security=none#${CLIENT_NAME}"
-        ;;
-    esac
-  fi
-  
-  echo -e "${CYAN}$VLESS_LINK${NC}"
-  echo ""
-  
-  # Opção para copiar ou salvar
-  echo -e "${YELLOW}Opções:${NC}"
-  echo "1) Copiar link"
-  echo "2) Salvar em arquivo"
-  echo "3) Mostrar QR Code (se disponível)"
-  echo "4) Voltar ao menu"
-  
-  read -p "Escolha uma opção [1-4]: " OPTION
-  
-  case $OPTION in
-    1)
-      if command -v xclip >/dev/null 2>&1; then
-        echo -n "$VLESS_LINK" | xclip -selection clipboard
-        echo -e "${GREEN}✓ Link copiado para a área de transferência${NC}"
-      elif command -v pbcopy >/dev/null 2>&1; then
-        echo -n "$VLESS_LINK" | pbcopy
-        echo -e "${GREEN}✓ Link copiado para a área de transferência${NC}"
-      else
-        echo -e "${YELLOW}Instale xclip para copiar automaticamente:${NC}"
-        echo -e "sudo apt install xclip"
-        echo ""
-        echo -e "${CYAN}Link acima${NC}"
-      fi
-      ;;
-    2)
-      read -p "Nome do arquivo [vless-link.txt]: " FILENAME
-      FILENAME=${FILENAME:-vless-link.txt}
-      echo "$VLESS_LINK" > "$FILENAME"
-      echo -e "${GREEN}✓ Link salvo em: $FILENAME${NC}"
-      ;;
-    3)
-      if command -v qrencode >/dev/null 2>&1; then
-        echo ""
-        qrencode -t UTF8 "$VLESS_LINK"
-        echo ""
-        echo -e "${GREEN}QR Code gerado acima${NC}"
-      else
-        echo -e "${YELLOW}Instale qrencode para gerar QR Code:${NC}"
-        echo -e "sudo apt install qrencode"
-      fi
-      ;;
-    4)
-      return
-      ;;
-    *)
-      echo -e "${RED}Opção inválida${NC}"
-      ;;
-  esac
-  
-  echo ""
-  read -p "Pressione Enter para continuar..." KEY
-}
-
-check_expired_clients() {
-  init_clients_file
-  
-  TODAY=$(date +%Y-%m-%d)
-  
-  EXPIRED_CLIENTS=$(jq --arg today "$TODAY" '
-    .clients[] | 
-    select(.expire_date != null and .expire_date != "" and .expire_date < $today and .enabled == true) |
-    .name' "$CLIENTS_FILE")
-  
-  if [ -n "$EXPIRED_CLIENTS" ]; then
-    echo -e "${YELLOW}⚠️  Clientes expirados:${NC}"
-    echo "$EXPIRED_CLIENTS"
+    # Criar diretório de configuração do Xray
+    mkdir -p /etc/xray
+    cp config.json /etc/xray/ 2>/dev/null || true
     
-    jq --arg today "$TODAY" '
-      .clients[] |= 
-        if (.expire_date != null and .expire_date != "" and .expire_date < $today and .enabled == true) then 
-          .enabled = false 
-        else . 
-        end' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-    
-    echo -e "${YELLOW}Clientes desativados${NC}"
-    update_xray_config
-  fi
-}
-
-update_xray_config() {
-  if [ ! -f "$CONFIG" ]; then
-    return
-  fi
-  
-  init_clients_file
-  
-  ACTIVE_CLIENTS=$(jq '[.clients[] | select(.enabled == true) | {"id": .uuid, "email": .email}]' "$CLIENTS_FILE")
-  
-  jq --argjson clients "$ACTIVE_CLIENTS" \
-     '.inbounds[0].settings.clients = $clients' "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-  
-  if systemctl is-active --quiet xray; then
-    systemctl restart xray
-    echo -e "${GREEN}Configuração atualizada${NC}"
-  fi
-}
-
-# =========================
-# Instalação do Xray Core
-# =========================
-
-install_xray_core() {
-  echo -e "${CYAN}Instalando Xray Core...${NC}"
-
-  ARCH=$(detect_arch)
-  [ "$ARCH" = "unsupported" ] && echo -e "${RED}Arquitetura não suportada${NC}" && return 1
-
-  apt update -y
-  apt install -y curl unzip jq uuid-runtime socat dnsutils
-
-  URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | \
-    jq -r ".assets[] | select(.name==\"Xray-linux-$ARCH.zip\") | .browser_download_url")
-
-  [ -z "$URL" ] && { echo -e "${RED}Falha ao obter URL${NC}"; return 1; }
-
-  mkdir -p /tmp/xray
-  curl -fsL "$URL" -o /tmp/xray/xray.zip || { echo -e "${RED}Falha no download${NC}"; return 1; }
-  unzip -o /tmp/xray/xray.zip -d /tmp/xray || { echo -e "${RED}Falha ao extrair${NC}"; return 1; }
-
-  install -m 755 /tmp/xray/xray "$XRAY_BIN"
-
-  if [ ! -f "$SERVICE" ]; then
-    cat >"$SERVICE" <<EOF
+    # Criar serviço systemd
+    cat > /etc/systemd/system/xray.service << EOF
 [Unit]
 Description=Xray Service
 After=network.target
+Wants=network.target
 
 [Service]
-ExecStart=$XRAY_BIN run -config $CONFIG
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
 Restart=on-failure
-LimitNOFILE=51200
+RestartSec=3
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    
     systemctl daemon-reload
-  fi
-
-  echo -e "${GREEN}Xray Core instalado${NC}"
-}
-
-# =========================
-# Selecionar Protocolo
-# =========================
-
-select_protocol() {
-  clear
-  echo "═════════════════════════════════"
-  echo -e "${GREEN}  SELECIONAR PROTOCOLO${NC}"
-  echo "═════════════════════════════════"
-  echo ""
-  echo "1) WebSocket (WS)"
-  echo "2) gRPC"
-  echo "3) TCP"
-  echo "4) HTTP/2 (xhttp)"
-  echo "0) Voltar"
-  echo ""
-  
-  read -p "Escolha: " PROTO_OPTION
-  
-  case $PROTO_OPTION in
-    1)
-      configure_ws
-      ;;
-    2)
-      configure_grpc
-      ;;
-    3)
-      configure_tcp
-      ;;
-    4)
-      configure_xhttp
-      ;;
-    0)
-      return
-      ;;
-    *)
-      echo -e "${RED}Opção inválida${NC}"
-      sleep 1
-      ;;
-  esac
-}
-
-configure_ws() {
-  echo -e "${CYAN}Configurando WebSocket...${NC}"
-  
-  read -p "Porta [443]: " PORT
-  PORT=${PORT:-443}
-  
-  read -p "Caminho WS [/vless]: " WS_PATH
-  WS_PATH=${WS_PATH:-/vless}
-  
-  cat >"$CONFIG" <<EOF
-{
-  "inbounds": [
-    {
-      "port": $PORT,
-      "protocol": "vless",
-      "settings": {
-        "clients": [],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "$WS_PATH"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
-}
-EOF
-  
-  echo "ws" > "$PROTOCOL_FILE"
-  echo -e "${GREEN}WebSocket configurado${NC}"
-}
-
-configure_grpc() {
-  echo -e "${CYAN}Configurando gRPC...${NC}"
-  
-  read -p "Porta [443]: " PORT
-  PORT=${PORT:-443}
-  
-  read -p "Service Name [GrpcService]: " SERVICE_NAME
-  SERVICE_NAME=${SERVICE_NAME:-GrpcService}
-  
-  cat >"$CONFIG" <<EOF
-{
-  "inbounds": [
-    {
-      "port": $PORT,
-      "protocol": "vless",
-      "settings": {
-        "clients": [],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "grpcSettings": {
-          "serviceName": "$SERVICE_NAME"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
-}
-EOF
-  
-  echo "grpc" > "$PROTOCOL_FILE"
-  echo -e "${GREEN}gRPC configurado${NC}"
-}
-
-configure_tcp() {
-  echo -e "${CYAN}Configurando TCP...${NC}"
-  
-  read -p "Porta [443]: " PORT
-  PORT=${PORT:-443}
-  
-  cat >"$CONFIG" <<EOF
-{
-  "inbounds": [
-    {
-      "port": $PORT,
-      "protocol": "vless",
-      "settings": {
-        "clients": [],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "tcp"
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
-}
-EOF
-  
-  echo "tcp" > "$PROTOCOL_FILE"
-  echo -e "${GREEN}TCP configurado${NC}"
-}
-
-configure_xhttp() {
-  echo -e "${CYAN}Configurando HTTP/2 (xhttp)...${NC}"
-  
-  read -p "Porta [443]: " PORT
-  PORT=${PORT:-443}
-  
-  read -p "Caminho [/h2]: " H2_PATH
-  H2_PATH=${H2_PATH:-/h2}
-  
-  cat >"$CONFIG" <<EOF
-{
-  "inbounds": [
-    {
-      "port": $PORT,
-      "protocol": "vless",
-      "settings": {
-        "clients": [],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "xhttpSettings": {
-          "path": "$H2_PATH"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
-}
-EOF
-  
-  echo "xhttp" > "$PROTOCOL_FILE"
-  echo -e "${GREEN}HTTP/2 configurado${NC}"
-}
-
-# =========================
-# Configurar TLS
-# =========================
-
-configure_tls() {
-  clear
-  echo "═════════════════════════════════"
-  echo -e "${GREEN}  CONFIGURAR TLS${NC}"
-  echo "═════════════════════════════════"
-  echo ""
-  echo "1) Configurar TLS com domínio"
-  echo "2) Remover TLS"
-  echo "0) Voltar"
-  echo ""
-  
-  read -p "Escolha: " TLS_OPTION
-  
-  case $TLS_OPTION in
-    1)
-      setup_tls
-      ;;
-    2)
-      remove_tls
-      ;;
-    0)
-      return
-      ;;
-    *)
-      echo -e "${RED}Opção inválida${NC}"
-      sleep 1
-      ;;
-  esac
-}
-
-setup_tls() {
-  if [ ! -f "$CONFIG" ]; then
-    echo -e "${RED}Configure primeiro um protocolo${NC}"
-    return
-  fi
-  
-  echo -e "${CYAN}=== CONFIGURAR TLS ===${NC}"
-  
-  read -p "Domínio (ex: exemplo.com): " DOMAIN
-  [ -z "$DOMAIN" ] && { echo -e "${RED}Domínio obrigatório${NC}"; return; }
-  
-  echo -e "${CYAN}Verificando DNS...${NC}"
-  check_domain_dns "$DOMAIN" || return
-  
-  echo -e "${CYAN}Instalando certificado SSL...${NC}"
-  
-  # Instalar acme.sh se necessário
-  if [ ! -d "/root/.acme.sh" ]; then
-    apt update -y
-    apt install -y socat
-    curl https://get.acme.sh | sh -s email=admin@$DOMAIN
-    source ~/.bashrc
-  fi
-  
-  # Limpar certificados antigos
-  clean_old_certificates "$DOMAIN"
-  
-  # Gerar novo certificado
-  /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256
-  
-  if [ $? -ne 0 ]; then
-    echo -e "${RED}Falha ao gerar certificado${NC}"
-    return
-  fi
-  
-  # Criar diretório para certificados
-  mkdir -p "$CERT_DIR"
-  
-  # Instalar certificado
-  /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-    --fullchain-file "$CERT_DIR/fullchain.pem" \
-    --key-file "$CERT_DIR/privkey.pem"
-  
-  # Salvar domínio
-  echo "$DOMAIN" > "$DOMAIN_FILE"
-  
-  # Atualizar configuração Xray
-  update_config_with_tls "$DOMAIN"
-  
-  echo -e "${GREEN}TLS configurado com sucesso!${NC}"
-  echo -e "Domínio: $DOMAIN"
-  echo -e "Certificados em: $CERT_DIR/"
-}
-
-update_config_with_tls() {
-  local domain="$1"
-  
-  # Ler configuração atual
-  if [ ! -f "$CONFIG" ]; then
-    return
-  fi
-  
-  # Adicionar TLS à configuração
-  jq --arg domain "$domain" \
-     '.inbounds[0].streamSettings.security = "tls" |
-      .inbounds[0].streamSettings.tlsSettings = {
-        "certificates": [
-          {
-            "certificateFile": "'"$CERT_DIR/fullchain.pem"'",
-            "keyFile": "'"$CERT_DIR/privkey.pem"'"
-          }
-        ]
-      } |
-      .inbounds[0].streamSettings.realitySettings = null' \
-     "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-  
-  # Reiniciar Xray se estiver rodando
-  if systemctl is-active --quiet xray; then
-    systemctl restart xray
-  fi
-}
-
-remove_tls() {
-  if [ ! -f "$CONFIG" ]; then
-    return
-  fi
-  
-  echo -e "${CYAN}Removendo TLS...${NC}"
-  
-  # Remover configurações TLS
-  jq '.inbounds[0].streamSettings.security = "none" |
-      .inbounds[0].streamSettings.tlsSettings = null |
-      .inbounds[0].streamSettings.realitySettings = null' \
-     "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-  
-  # Remover arquivos de domínio
-  rm -f "$DOMAIN_FILE" 2>/dev/null
-  
-  # Reiniciar Xray se estiver rodando
-  if systemctl is-active --quiet xray; then
-    systemctl restart xray
-  fi
-  
-  echo -e "${GREEN}TLS removido${NC}"
-}
-
-# =========================
-# Gerenciar Clientes
-# =========================
-
-manage_clients() {
-  while true; do
-    clear
-    echo "═════════════════════════════════"
-    echo -e "${GREEN}  GERENCIAR CLIENTES${NC}"
-    echo "═════════════════════════════════"
-    echo ""
-    echo "1) Adicionar cliente"
-    echo "2) Listar clientes"
-    echo "3) Deletar cliente"
-    echo "4) Ativar/Desativar cliente"
-    echo "5) Atualizar data de expiração"
-    echo "6) Atualizar limite de dados"
-    echo "7) Verificar clientes expirados"
-    echo "0) Voltar"
-    echo ""
+    rm -f xray.zip
     
-    read -p "Escolha: " CLIENT_OPTION
-    
-    case $CLIENT_OPTION in
-      1) add_client;;
-      2) list_clients;;
-      3) delete_client;;
-      4) toggle_client;;
-      5) update_client_expiry;;
-      6) update_client_limit;;
-      7) check_expired_clients;;
-      0) return;;
-      *) echo -e "${RED}Opção inválida${NC}"; sleep 1;;
-    esac
-    
-    [ "$CLIENT_OPTION" != "0" ] && read -p "Pressione Enter para continuar..." KEY
-  done
+    print_success "Xray-core instalado"
 }
 
-# =========================
-# Ver Status
-# =========================
-
-show_status() {
-  clear
-  echo "═════════════════════════════════"
-  echo -e "${GREEN}  STATUS DO SISTEMA${NC}"
-  echo "═════════════════════════════════"
-  echo ""
-  
-  # Status do Xray
-  if systemctl is-active --quiet xray; then
-    echo -e "Xray: ${GREEN}● ATIVO${NC}"
-  else
-    echo -e "Xray: ${RED}● INATIVO${NC}"
-  fi
-  
-  # Informações do serviço
-  if [ -f "$SERVICE" ]; then
-    echo -e "Serviço: ${GREEN}Instalado${NC}"
-  else
-    echo -e "Serviço: ${RED}Não instalado${NC}"
-  fi
-  
-  # Protocolo atual
-  PROTOCOL=$(get_current_protocol)
-  if [ -n "$PROTOCOL" ]; then
-    echo -e "Protocolo: ${CYAN}$PROTOCOL${NC}"
-  else
-    echo -e "Protocolo: ${RED}Não configurado${NC}"
-  fi
-  
-  # TLS
-  TLS_MODE=$(get_tls_mode)
-  if [ "$TLS_MODE" = "tls" ]; then
-    echo -e "TLS: ${GREEN}Ativado${NC}"
-    if [ -f "$DOMAIN_FILE" ]; then
-      DOMAIN=$(cat "$DOMAIN_FILE")
-      echo -e "Domínio: ${CYAN}$DOMAIN${NC}"
-    fi
-  else
-    echo -e "TLS: ${YELLOW}Desativado${NC}"
-  fi
-  
-  # Clientes
-  if [ -f "$CLIENTS_FILE" ]; then
-    CLIENT_COUNT=$(jq '.clients | length' "$CLIENTS_FILE")
-    ACTIVE_COUNT=$(jq '[.clients[] | select(.enabled == true)] | length' "$CLIENTS_FILE")
-    echo -e "Clientes: ${CYAN}$ACTIVE_COUNT/$CLIENT_COUNT ativos${NC}"
-  else
-    echo -e "Clientes: ${YELLOW}0${NC}"
-  fi
-  
-  # Porta
-  if [ -f "$CONFIG" ]; then
-    PORT=$(get_config_value '.inbounds[0].port')
-    echo -e "Porta: ${CYAN}$PORT${NC}"
-  fi
-  
-  # Uso de memória
-  if systemctl is-active --quiet xray; then
-    XRAY_PID=$(systemctl show --property=MainPID xray | cut -d= -f2)
-    if [ "$XRAY_PID" -ne 0 ]; then
-      MEM_USAGE=$(ps -o rss= -p "$XRAY_PID" | awk '{printf "%.1f", $1/1024}')
-      echo -e "Uso de memória: ${CYAN}${MEM_USAGE}MB${NC}"
-    fi
-  fi
-  
-  echo ""
-  echo "═════════════════════════════════"
-  echo -e "${YELLOW}Comandos úteis:${NC}"
-  echo "systemctl status xray"
-  echo "systemctl restart xray"
-  echo "journalctl -u xray -f"
-  echo ""
-  
-  read -p "Pressione Enter para voltar..." KEY
-}
-
-# =========================
-# Menu Principal
-# =========================
-
-main_menu() {
-  while true; do
-    clear
-    echo "═══════════════════════════════════════════════"
-    printf "\033[0;35m"
-    printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
-    printf '██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║\n'
-    printf '███████║  ███╔╝ ██████╔╝███████║█████╗  ██║\n'
-    printf '██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║\n'
-    printf '██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗\n'
-    printf '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝\n'
-    printf "\033[0m"
-    echo "═══════════════════════════════════════════════"
-    echo -e "${GREEN}          AZRAEL XRAY MANAGER${NC}"
-    echo "═══════════════════════════════════════════════"
-    echo ""
-    echo "1) Instalar Xray Core"
-    echo "2) Configurar protocolo"
-    echo "3) Configurar TLS"
-    echo "4) Gerenciar clientes"
-    echo "5) Ver status"
-    echo "6) Ver link VLESS"
-    echo "7) Desinstalar tudo"
-    echo "0) Sair"
-    echo ""
+# Instalar Proxy WebSocket SSH
+install_websocket_proxy() {
+    print_status "Instalando Proxy WebSocket SSH..."
     
-    read -p "Escolha uma opção [0-7]: " OPTION
-    
-    case $OPTION in
-      1) install_xray_core;;
-      2) select_protocol;;
-      3) configure_tls;;
-      4) manage_clients;;
-      5) show_status;;
-      6) show_vless_link;;
-      7) uninstall_script;;
-      0) exit 0;;
-      *) echo -e "${RED}Opção inválida${NC}"; sleep 1;;
-    esac
-    
-    [ "$OPTION" != "0" ] && [ "$OPTION" != "6" ] && read -p "Pressione Enter para continuar..." KEY
-  done
-}
+    # Criar script do proxy
+    cat > $INSTALL_DIR/proxy/ws_ssh_proxy.py << 'PYTHONEOF'
+#!/usr/bin/env python3
+"""
+AZRAEL WebSocket SSH Proxy
+Handshake: 101 Switching Protocols + 200 OK
+"""
 
-# =========================
+import asyncio
+import websockets
+import socket
+import ssl
+import logging
+import json
+import os
+from typing import Optional
+import sys
+
+# Configuração
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class SSHWebSocketProxy:
+    def __init__(self, ws_host='0.0.0.0', ws_port=8081, ssh_host='localhost', ssh_port=22):
+        self.ws_host = ws_host
+        self.ws_port = ws_port
+        self.ssh_host = ssh_host
+        self.ssh_port = ssh_port
+        self.connections = {}
+        
+    async def handle_websocket(self, websocket, path):
+        """Manipula conexão WebSocket"""
+        client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        logger.info(f"[{client_id}] Nova conexão WebSocket")
+        
+        try:
+            # 1. Primeiro enviamos uma resposta HTTP 101
+            await websocket.send("HTTP/1.1 101 Switching Protocols\r\n")
+            await websocket.send("Upgrade: websocket\r\n")
+            await websocket.send("Connection: Upgrade\r\n")
+            await websocket.send("Sec-WebSocket-Accept: AZRAEL-WS-SSH-PROXY\r\n")
+            await websocket.send("\r\n")
+            
+            logger.info(f"[{client_id}] 101 Switching Protocols enviado")
+            await asyncio.sleep(0.1)
+            
+            # 2. Enviamos HTTP 200 OK via WebSocket
+            response_200 = json.dumps({
+                "status": "200",
+                "message": "Connection Established",
+                "protocol": "ssh",
+                "via": "AZRAEL-WS-PROXY"
+            })
+            
+            await websocket.send(response_200)
+            logger.info(f"[{client_id}] 200 OK enviado")
+            
+            # 3. Conectar ao SSH
+            logger.info(f"[{client_id}] Conectando ao SSH {self.ssh_host}:{self.ssh_port}")
+            
+            # Criar conexão TCP com SSH
+            reader, writer = await asyncio.open_connection(
+                self.ssh_host, 
+                self.ssh_port
+            )
+            
+            logger.info(f"[{client_id}] Conexão SSH estabelecida")
+            
+            # 4. Iniciar proxy bidirecional
+            self.connections[client_id] = {
+                'websocket': websocket,
+                'ssh_reader': reader,
+                'ssh_writer': writer,
+                'active': True
+            }
+            
+            await self.bidirectional_proxy(websocket, reader, writer, client_id)
+            
+        except Exception as e:
+            logger.error(f"[{client_id}] Erro: {e}")
+        finally:
+            if client_id in self.connections:
+                del self.connections[client_id]
+            logger.info(f"[{client_id}] Conexão encerrada")
+    
+    async def bidirectional_proxy(self, websocket, ssh_reader, ssh_writer, client_id):
+        """Proxy bidirecional entre WebSocket e SSH"""
+        try:
+            # Tarefa 1: WebSocket → SSH
+            async def ws_to_ssh():
+                try:
+                    async for message in websocket:
+                        if isinstance(message, str):
+                            message = message.encode()
+                        ssh_writer.write(message)
+                        await ssh_writer.drain()
+                        logger.debug(f"[{client_id}] WS→SSH: {len(message)} bytes")
+                except:
+                    pass
+                finally:
+                    ssh_writer.close()
+            
+            # Tarefa 2: SSH → WebSocket
+            async def ssh_to_ws():
+                try:
+                    while True:
+                        data = await ssh_reader.read(4096)
+                        if not data:
+                            break
+                        await websocket.send(data)
+                        logger.debug(f"[{client_id}] SSH→WS: {len(data)} bytes")
+                except:
+                    pass
+            
+            # Executar ambas as tarefas
+            await asyncio.gather(ws_to_ssh(), ssh_to_ws())
+            
+        except Exception as e:
+            logger.error(f"[{client_id}] Erro no proxy: {e}")
+    
+    async def start(self):
+        """Inicia o servidor WebSocket"""
+        logger.info(f"Iniciando Proxy WebSocket SSH em ws://{self.ws_host}:{self.ws_port}")
+        logger.info(f"SSH Backend: {self.ssh_host}:{self.ssh_port}")
+        
+        # Configurar SSL opcional
+        ssl_context = None
+        ssl_cert = "/etc/azrael/ssl/cert.pem"
+        ssl_key = "/etc/azrael/ssl/key.pem"
+        
+        if os.path.exists(ssl_cert) and os.path.exists(ssl_key):
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_context.load_cert_chain(ssl_cert, ssl_key)
+            logger.info("SSL/TLS habilitado")
+        
+        server = await websockets.serve(
+            self.handle_websocket,
+            self.ws_host,
+            self.ws_port,
+            ssl=ssl_context
+        )
+        
+        logger.info("Proxy WebSocket SSH pronto!")
+        
+        # Manter servidor rodando
+        await server.wait_closed()
+    
+    def stop(self):
+        """Para todas as conexões"""
+        for client_id, conn in self.connections.items():
+            try:
+                conn['ssh_writer'].close()
+            except:
+                pass
+        self.connections.clear()
+        logger.info("Proxy parado")
+
+async def main():
+    """Função principal"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Proxy WebSocket SSH')
+    parser.add_argument('--ws-host', default='0.0.0.0', help='Host WebSocket')
+    parser.add_argument('--ws-port', type=int, default=8081, help='Porta WebSocket')
+    parser.add_argument('--ssh-host', default='localhost', help='Host SSH')
+    parser.add_argument('--ssh-port', type=int, default=22, help='Porta SSH')
+    
+    args = parser.parse_args()
+    
+    proxy = SSHWebSocketProxy(
+        ws_host=args.ws_host,
+        ws_port=args.ws_port,
+        ssh_host=args.ssh_host,
+        ssh_port=args.ssh_port
+    )
+    
+    try:
+        await proxy.start()
+    except KeyboardInterrupt:
+        logger.info("Encerrando proxy...")
+        proxy.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+PYTHONEOF
+    
+    # Criar script simplificado para systemd
+    cat > $INSTALL_DIR/proxy/run_proxy.py << 'PYTHONEOF'
+#!/usr/bin/env python3
+import asyncio
+import sys
+import os
+sys.path.append('/opt/azrael-manager/proxy')
+
+# Importar do script principal
+exec(open('/opt/azrael-manager/proxy/ws_ssh_proxy.py').read())
+
 # Executar
-# =========================
+if __name__ == "__main__":
+    asyncio.run(main())
+PYTHONEOF
+    
+    # Tornar executáveis
+    chmod +x $INSTALL_DIR/proxy/*.py
+    
+    # Criar serviço systemd para o proxy
+    cat > /etc/systemd/system/azrael-ws-proxy.service << EOF
+[Unit]
+Description=AZRAEL WebSocket SSH Proxy
+After=network.target
+Wants=network.target
+Requires=network-online.target
 
-main_menu
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR/proxy
+ExecStart=/usr/bin/python3 $INSTALL_DIR/proxy/run_proxy.py \
+    --ws-host 0.0.0.0 \
+    --ws-port $WS_PROXY_PORT \
+    --ssh-host localhost \
+    --ssh-port $SSH_PORT
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=azrael-ws-proxy
+Environment=PYTHONUNBUFFERED=1
+
+# Segurança
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=$INSTALL_DIR $LOG_DIR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Criar configuração
+    cat > $CONFIG_DIR/ws-proxy.conf << EOF
+# Configuração do Proxy WebSocket SSH
+WS_HOST=0.0.0.0
+WS_PORT=$WS_PROXY_PORT
+SSH_HOST=localhost
+SSH_PORT=$SSH_PORT
+LOG_LEVEL=INFO
+EOF
+    
+    print_success "Proxy WebSocket SSH instalado"
+}
+
+# Instalar script de gerenciamento
+install_manager() {
+    print_status "Instalando script de gerenciamento..."
+    
+    # Criar script principal
+    cat > /usr/local/bin/azrael << 'BASHSCRIPTEOF'
+#!/bin/bash
+
+# AZRAEL XRAY MANAGER + WS SSH PROXY
+# Script de gerenciamento completo
+
+# Cores
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Configurações
+CONFIG_DIR="/etc/azrael"
+LOG_DIR="/var/log/azrael"
+INSTALL_DIR="/opt/azrael-manager"
+
+# Banner
+show_banner() {
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════╗"
+    echo "║           AZRAEL MANAGER v2.0                ║"
+    echo "╠══════════════════════════════════════════════╣"
+    echo "║   Xray-core + WebSocket SSH Proxy            ║"
+    echo "╚══════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# Status dos serviços
+check_status() {
+    echo -e "${CYAN}=== STATUS DOS SERVIÇOS ===${NC}"
+    echo ""
+    
+    # Xray
+    if systemctl is-active --quiet xray; then
+        echo -e "Xray: ${GREEN}● ATIVO${NC}"
+        echo "  $(systemctl status xray --no-pager | grep 'Main PID')"
+    else
+        echo -e "Xray: ${RED}○ INATIVO${NC}"
+    fi
+    
+    # WebSocket Proxy
+    if systemctl is-active --quiet azrael-ws-proxy; then
+        echo -e "WS Proxy: ${GREEN}● ATIVO${NC}"
+        echo "  $(systemctl status azrael-ws-proxy --no-pager | grep 'Main PID')"
+        
+        # Mostrar endpoint
+        if [ -f "$CONFIG_DIR/ws-proxy.conf" ]; then
+            source $CONFIG_DIR/ws-proxy.conf
+            IP=$(curl -s --max-time 3 https://api.ipify.org || echo "localhost")
+            echo -e "  ${YELLOW}Endpoint:${NC} ws://$IP:$WS_PORT/"
+        fi
+    else
+        echo -e "WS Proxy: ${RED}○ INATIVO${NC}"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}=== ESTATÍSTICAS ===${NC}"
+    
+    # Conexões ativas
+    XRAY_CONNS=$(ss -tnp | grep xray | wc -l)
+    WS_CONNS=$(ss -tnp | grep python | grep $WS_PROXY_PORT | wc -l 2>/dev/null || echo "0")
+    
+    echo "Conexões Xray: $XRAY_CONNS"
+    echo "Conexões WS Proxy: $WS_CONNS"
+}
+
+# Menu de controle de serviços
+service_menu() {
+    while true; do
+        clear
+        show_banner
+        
+        echo -e "${CYAN}=== CONTROLE DE SERVIÇOS ===${NC}"
+        echo ""
+        echo "1. Iniciar todos os serviços"
+        echo "2. Parar todos os serviços"
+        echo "3. Reiniciar todos os serviços"
+        echo "4. Status dos serviços"
+        echo "5. Ver logs do Xray"
+        echo "6. Ver logs do WS Proxy"
+        echo "7. Habilitar na inicialização"
+        echo "8. Voltar"
+        echo ""
+        
+        read -p "Selecione: " choice
+        
+        case $choice in
+            1)
+                systemctl start xray
+                systemctl start azrael-ws-proxy
+                echo -e "${GREEN}Serviços iniciados${NC}"
+                sleep 2
+                ;;
+            2)
+                systemctl stop xray
+                systemctl stop azrael-ws-proxy
+                echo -e "${YELLOW}Serviços parados${NC}"
+                sleep 2
+                ;;
+            3)
+                systemctl restart xray
+                systemctl restart azrael-ws-proxy
+                echo -e "${GREEN}Serviços reiniciados${NC}"
+                sleep 2
+                ;;
+            4)
+                check_status
+                read -p "Pressione Enter para continuar..."
+                ;;
+            5)
+                journalctl -u xray -f --no-pager -n 50
+                ;;
+            6)
+                journalctl -u azrael-ws-proxy -f --no-pager -n 50
+                ;;
+            7)
+                systemctl enable xray
+                systemctl enable azrael-ws-proxy
+                echo -e "${GREEN}Serviços habilitados na inicialização${NC}"
+                sleep 2
+                ;;
+            8)
+                return
+                ;;
+            *)
+                echo -e "${RED}Opção inválida${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Testar conexões
+test_connections() {
+    echo -e "${CYAN}=== TESTES DE CONEXÃO ===${NC}"
+    echo ""
+    
+    # Testar WebSocket Proxy
+    if [ -f "$CONFIG_DIR/ws-proxy.conf" ]; then
+        source $CONFIG_DIR/ws-proxy.conf
+        
+        echo -e "${YELLOW}Testando Proxy WebSocket...${NC}"
+        
+        # Teste 1: Handshake básico
+        echo -n "Teste handshake: "
+        if curl -s -i -H "Upgrade: websocket" -H "Connection: Upgrade" \
+                -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+                http://localhost:$WS_PORT/ 2>/dev/null | grep -q "101"; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FALHOU${NC}"
+        fi
+        
+        # Teste 2: Conexão TCP
+        echo -n "Teste porta aberta: "
+        if timeout 2 bash -c "echo > /dev/tcp/localhost/$WS_PORT"; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FALHOU${NC}"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Instruções para conectar:${NC}"
+    echo "1. Via websocat:"
+    echo "   websocat ws://SEU_IP:$WS_PORT/ tcp:localhost:22"
+    echo ""
+    echo "2. Via SSH com proxy:"
+    echo "   ssh -o 'ProxyCommand=websocat -b ws://SEU_IP:$WS_PORT/ tcp:%h:%p' user@localhost"
+    echo ""
+    
+    read -p "Pressione Enter para continuar..."
+}
+
+# Configurações
+config_menu() {
+    while true; do
+        clear
+        show_banner
+        
+        echo -e "${CYAN}=== CONFIGURAÇÕES ===${NC}"
+        echo ""
+        echo "1. Alterar porta do WebSocket Proxy"
+        echo "2. Alterar backend SSH"
+        echo "3. Gerar certificado SSL"
+        echo "4. Configurar domínio"
+        echo "5. Backup configuração"
+        echo "6. Restaurar configuração"
+        echo "7. Voltar"
+        echo ""
+        
+        read -p "Selecione: " choice
+        
+        case $choice in
+            1)
+                read -p "Nova porta WebSocket [8081]: " new_port
+                new_port=${new_port:-8081}
+                
+                if [[ $new_port =~ ^[0-9]+$ ]] && [ $new_port -gt 0 ] && [ $new_port -lt 65536 ]; then
+                    sed -i "s/WS_PORT=.*/WS_PORT=$new_port/" $CONFIG_DIR/ws-proxy.conf
+                    systemctl restart azrael-ws-proxy
+                    echo -e "${GREEN}Porta alterada para $new_port${NC}"
+                else
+                    echo -e "${RED}Porta inválida${NC}"
+                fi
+                sleep 2
+                ;;
+            2)
+                read -p "Host SSH [localhost]: " ssh_host
+                ssh_host=${ssh_host:-localhost}
+                
+                read -p "Porta SSH [22]: " ssh_port
+                ssh_port=${ssh_port:-22}
+                
+                sed -i "s/SSH_HOST=.*/SSH_HOST=$ssh_host/" $CONFIG_DIR/ws-proxy.conf
+                sed -i "s/SSH_PORT=.*/SSH_PORT=$ssh_port/" $CONFIG_DIR/ws-proxy.conf
+                
+                # Atualizar script do proxy
+                sed -i "s/--ssh-host localhost/--ssh-host $ssh_host/" /etc/systemd/system/azrael-ws-proxy.service
+                sed -i "s/--ssh-port 22/--ssh-port $ssh_port/" /etc/systemd/system/azrael-ws-proxy.service
+                
+                systemctl daemon-reload
+                systemctl restart azrael-ws-proxy
+                
+                echo -e "${GREEN}Backend SSH atualizado${NC}"
+                sleep 2
+                ;;
+            7)
+                return
+                ;;
+            *)
+                echo -e "${RED}Opção inválida${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Instalar websocat
+install_websocat() {
+    echo -e "${CYAN}=== INSTALAR WEBSOCAT ===${NC}"
+    echo ""
+    
+    if command -v websocat &> /dev/null; then
+        echo -e "${GREEN}websocat já está instalado${NC}"
+    else
+        echo -e "${YELLOW}Instalando websocat...${NC}"
+        
+        ARCH=$(uname -m)
+        case $ARCH in
+            x86_64)
+                ARCH="x86_64"
+                ;;
+            aarch64|arm64)
+                ARCH="aarch64"
+                ;;
+            *)
+                echo -e "${RED}Arquitetura não suportada${NC}"
+                return
+                ;;
+        esac
+        
+        wget -q https://github.com/vi/websocat/releases/latest/download/websocat.$ARCH-unknown-linux-musl \
+            -O /usr/local/bin/websocat
+        chmod +x /usr/local/bin/websocat
+        
+        if [ -f /usr/local/bin/websocat ]; then
+            echo -e "${GREEN}websocat instalado com sucesso${NC}"
+            echo ""
+            echo "Exemplo de uso:"
+            echo "  websocat ws://localhost:8081/ tcp:localhost:22"
+        else
+            echo -e "${RED}Falha ao instalar websocat${NC}"
+        fi
+    fi
+    
+    read -p "Pressione Enter para continuar..."
+}
+
+# Menu principal
+main_menu() {
+    while true; do
+        clear
+        show_banner
+        check_status
+        
+        echo ""
+        echo -e "${CYAN}=== MENU PRINCIPAL ===${NC}"
+        echo ""
+        echo "1. Controle de Serviços"
+        echo "2. Testar Conexões"
+        echo "3. Instalar Websocat (cliente)"
+        echo "4. Configurações"
+        echo "5. Atualizar AZRAEL"
+        echo "6. Desinstalar"
+        echo "7. Sair"
+        echo ""
+        
+        read -p "Selecione: " choice
+        
+        case $choice in
+            1)
+                service_menu
+                ;;
+            2)
+                test_connections
+                ;;
+            3)
+                install_websocat
+                ;;
+            4)
+                config_menu
+                ;;
+            5)
+                echo -e "${YELLOW}Atualizando AZRAEL...${NC}"
+                curl -s https://raw.githubusercontent.com/your-repo/azrael/main/install.sh | sudo bash
+                ;;
+            6)
+                read -p "Tem certeza que deseja desinstalar? (s/N): " confirm
+                if [[ $confirm =~ ^[Ss]$ ]]; then
+                    echo -e "${YELLOW}Desinstalando...${NC}"
+                    systemctl stop xray azrael-ws-proxy
+                    systemctl disable xray azrael-ws-proxy
+                    rm -f /etc/systemd/system/xray.service
+                    rm -f /etc/systemd/system/azrael-ws-proxy.service
+                    rm -rf /opt/azrael-manager /etc/azrael /var/log/azrael
+                    rm -f /usr/local/bin/azrael
+                    systemctl daemon-reload
+                    echo -e "${GREEN}AZRAEL desinstalado${NC}"
+                    exit 0
+                fi
+                ;;
+            7)
+                echo -e "${GREEN}Saindo...${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Opção inválida${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Executar menu principal
+if [ "$1" = "--status" ]; then
+    check_status
+elif [ "$1" = "--start" ]; then
+    systemctl start xray azrael-ws-proxy
+    echo "Serviços iniciados"
+elif [ "$1" = "--stop" ]; then
+    systemctl stop xray azrael-ws-proxy
+    echo "Serviços parados"
+elif [ "$1" = "--restart" ]; then
+    systemctl restart xray azrael-ws-proxy
+    echo "Serviços reiniciados"
+elif [ "$1" = "--test" ]; then
+    test_connections
+else
+    main_menu
+fi
+BASHSCRIPTEOF
+    
+    # Tornar executável
+    chmod +x /usr/local/bin/azrael
+    
+    # Criar atalho
+    ln -sf /usr/local/bin/azrael /usr/local/bin/az
+    
+    print_success "Script de gerenciamento instalado"
+}
+
+# Configurar firewall
+setup_firewall() {
+    print_status "Configurando firewall..."
+    
+    # Verificar se ufw está instalado
+    if command -v ufw &> /dev/null; then
+        ufw allow $WS_PROXY_PORT/tcp comment "AZRAEL WebSocket Proxy"
+        ufw allow 443/tcp comment "Xray VLESS"
+        ufw allow 22/tcp comment "SSH"
+        print_success "Firewall configurado"
+    else
+        print_warning "UFW não encontrado, pulando configuração de firewall"
+    fi
+}
+
+# Configurar banner SSH
+setup_ssh_banner() {
+    print_status "Configurando banner SSH..."
+    
+    cat > /etc/ssh/azrael-banner << 'BANNEREOF'
+╔══════════════════════════════════════════════╗
+║           SERVIDOR AZRAEL v2.0               ║
+╠══════════════════════════════════════════════╣
+║ • Xray Manager: azrael                       ║
+║ • WS SSH Proxy: porta 8081                   ║
+║ • SSH via WebSocket disponível               ║
+╚══════════════════════════════════════════════╝
+BANNEREOF
+    
+    # Configurar banner no SSH
+    if grep -q "Banner" /etc/ssh/sshd_config; then
+        sed -i 's|^#*Banner.*|Banner /etc/ssh/azrael-banner|' /etc/ssh/sshd_config
+    else
+        echo "Banner /etc/ssh/azrael-banner" >> /etc/ssh/sshd_config
+    fi
+    
+    systemctl restart sshd
+    print_success "Banner SSH configurado"
+}
+
+# Instalar websocat para testes
+install_websocat_cli() {
+    print_status "Instalando websocat (cliente de teste)..."
+    
+    ARCH=$(uname -m)
+    case $ARCH in
+        x86_64)
+            BIN_NAME="websocat.x86_64-unknown-linux-musl"
+            ;;
+        aarch64|arm64)
+            BIN_NAME="websocat.aarch64-unknown-linux-musl"
+            ;;
+        *)
+            print_warning "Arquitetura não suportada para websocat"
+            return
+            ;;
+    esac
+    
+    wget -q https://github.com/vi/websocat/releases/latest/download/$BIN_NAME \
+        -O /usr/local/bin/websocat
+    chmod +x /usr/local/bin/websocat
+    
+    if [ -f /usr/local/bin/websocat ]; then
+        print_success "websocat instalado"
+    else
+        print_warning "Não foi possível instalar websocat"
+    fi
+}
+
+# Iniciar serviços
+start_services() {
+    print_status "Iniciando serviços..."
+    
+    systemctl daemon-reload
+    
+    # Habilitar e iniciar serviços
+    systemctl enable xray 2>/dev/null || true
+    systemctl enable azrael-ws-proxy
+    
+    systemctl start xray
+    systemctl start azrael-ws-proxy
+    
+    sleep 2
+    
+    # Verificar status
+    if systemctl is-active --quiet azrael-ws-proxy; then
+        print_success "Proxy WebSocket SSH iniciado"
+    else
+        print_error "Falha ao iniciar proxy WebSocket"
+        journalctl -u azrael-ws-proxy --no-pager -n 10
+    fi
+    
+    if systemctl is-active --quiet xray; then
+        print_success "Xray iniciado"
+    else
+        print_warning "Xray não iniciado (configuração necessária)"
+    fi
+}
+
+# Mostrar informações finais
+show_final_info() {
+    clear
+    print_banner
+    
+    # Obter IP público
+    PUBLIC_IP=$(curl -s --max-time 3 https://api.ipify.org || echo "SEU_IP")
+    
+    echo -e "${GREEN}✅ INSTALAÇÃO COMPLETA!${NC}"
+    echo ""
+    echo -e "${CYAN}================================================================================${NC}"
+    echo -e "${YELLOW}📦 SERVIÇOS INSTALADOS:${NC}"
+    echo -e "  • Xray-core (VPN/Proxy)"
+    echo -e "  • WebSocket SSH Proxy (porta: ${WS_PROXY_PORT})"
+    echo -e "  • Script de gerenciamento: ${GREEN}azrael${NC} ou ${GREEN}az${NC}"
+    echo ""
+    echo -e "${YELLOW}🔗 ENDPOINTS:${NC}"
+    echo -e "  WebSocket SSH Proxy: ${GREEN}ws://${PUBLIC_IP}:${WS_PROXY_PORT}/${NC}"
+    echo ""
+    echo -e "${YELLOW}🔧 COMANDOS DE GERENCIAMENTO:${NC}"
+    echo -e "  ${CYAN}azrael${NC}               - Menu interativo"
+    echo -e "  ${CYAN}azrael --status${NC}      - Status dos serviços"
+    echo -e "  ${CYAN}azrael --start${NC}       - Iniciar serviços"
+    echo -e "  ${CYAN}azrael --stop${NC}        - Parar serviços"
+    echo -e "  ${CYAN}azrael --restart${NC}     - Reiniciar serviços"
+    echo ""
+    echo -e "${YELLOW}🔌 CONECTAR VIA SSH:${NC}"
+    echo -e "  ${CYAN}websocat ws://${PUBLIC_IP}:${WS_PROXY_PORT}/ tcp:localhost:22${NC}"
+    echo ""
+    echo -e "  ${CYAN}ssh -o 'ProxyCommand=websocat -b ws://${PUBLIC_IP}:${WS_PROXY_PORT}/ tcp:%h:%p' user@localhost${NC}"
+    echo ""
+    echo -e "${YELLOW}📊 VER LOGS:${NC}"
+    echo -e "  ${CYAN}journalctl -u azrael-ws-proxy -f${NC}"
+    echo -e "  ${CYAN}journalctl -u xray -f${NC}"
+    echo ""
+    echo -e "${CYAN}================================================================================${NC}"
+    echo ""
+    echo -e "${GREEN}🎉 Aproveite o AZRAEL Manager!${NC}"
+    echo ""
+    
+    # Iniciar menu interativo
+    if [[ $1 != "noninteractive" ]]; then
+        read -p "Pressione Enter para abrir o menu de gerenciamento..."
+        /usr/local/bin/azrael
+    fi
+}
+
+# Função principal de instalação
+main_install() {
+    print_banner
+    
+    # Verificar root
+    check_root
+    
+    # Verificar sistema
+    check_system
+    
+    # Atualizar sistema
+    print_status "Atualizando sistema..."
+    apt update && apt upgrade -y
+    
+    # Instalar dependências Python
+    print_status "Instalando dependências Python..."
+    apt install -y python3 python3-pip python3-venv
+    
+    # Instalar websockets
+    pip3 install websockets
+    
+    # Criar diretórios
+    create_directories
+    
+    # Instalar componentes
+    install_xray
+    install_websocket_proxy
+    install_manager
+    install_websocat_cli
+    
+    # Configurar sistema
+    setup_firewall
+    setup_ssh_banner
+    
+    # Iniciar serviços
+    start_services
+    
+    # Mostrar informações
+    show_final_info
+}
+
+# Desinstalação
+uninstall() {
+    echo -e "${RED}=== DESINSTALAÇÃO COMPLETA ===${NC}"
+    echo ""
+    
+    read -p "Tem certeza que deseja remover tudo? (s/N): " confirm
+    if [[ ! $confirm =~ ^[Ss]$ ]]; then
+        echo "Cancelado."
+        exit 0
+    fi
+    
+    print_status "Parando serviços..."
+    systemctl stop xray azrael-ws-proxy 2>/dev/null || true
+    systemctl disable xray azrael-ws-proxy 2>/dev/null || true
+    
+    print_status "Removendo arquivos..."
+    rm -rf $INSTALL_DIR $CONFIG_DIR $LOG_DIR
+    rm -f /usr/local/bin/azrael /usr/local/bin/az
+    rm -f /etc/systemd/system/xray.service
+    rm -f /etc/systemd/system/azrael-ws-proxy.service
+    rm -f /etc/ssh/azrael-banner
+    
+    print_status "Removendo regras de firewall..."
+    if command -v ufw &> /dev/null; then
+        ufw delete allow $WS_PROXY_PORT/tcp 2>/dev/null || true
+    fi
+    
+    print_status "Recarregando systemd..."
+    systemctl daemon-reload
+    
+    echo ""
+    echo -e "${GREEN}✅ AZRAEL Manager removido completamente!${NC}"
+    echo ""
+}
+
+# Script de atualização
+update_azrael() {
+    echo -e "${CYAN}=== ATUALIZANDO AZRAEL ===${NC}"
+    
+    # Backup configurações
+    if [ -f "$CONFIG_DIR/ws-proxy.conf" ]; then
+        cp $CONFIG_DIR/ws-proxy.conf /tmp/azrael-backup.conf
+    fi
+    
+    # Parar serviços
+    systemctl stop azrael-ws-proxy
+    
+    # Baixar script atualizado
+    wget -q https://raw.githubusercontent.com/your-repo/azrael/main/install.sh -O /tmp/azrael-update.sh
+    chmod +x /tmp/azrael-update.sh
+    
+    # Executar atualização
+    /tmp/azrael-update.sh
+    
+    # Restaurar configurações
+    if [ -f "/tmp/azrael-backup.conf" ]; then
+        cp /tmp/azrael-backup.conf $CONFIG_DIR/ws-proxy.conf
+        systemctl restart azrael-ws-proxy
+    fi
+    
+    echo -e "${GREEN}✅ Atualização completa!${NC}"
+}
+
+# Menu de instalação
+if [[ $# -eq 0 ]]; then
+    main_install
+else
+    case $1 in
+        "--uninstall"|"-u")
+            uninstall
+            ;;
+        "--update"|"-U")
+            update_azrael
+            ;;
+        "--help"|"-h")
+            echo "Uso: $0 [OPÇÃO]"
+            echo ""
+            echo "Opções:"
+            echo "  --uninstall, -u    Remover completamente"
+            echo "  --update, -U       Atualizar para versão mais recente"
+            echo "  --help, -h         Mostrar esta ajuda"
+            echo ""
+            echo "Sem opções: Instalação interativa completa"
+            ;;
+        *)
+            echo "Opção desconhecida: $1"
+            echo "Use --help para ver opções disponíveis"
+            exit 1
+            ;;
+    esac
+fi
