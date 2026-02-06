@@ -12,13 +12,13 @@ Um script de gerenciamento completo para Xray-core com interface de menu e siste
 
 ## Instalação
 ```bash
-curl -sL https://raw.githubusercontent.com/seu-usuario/azrael-xray-manager/main/install.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/Fabricio110916/azrael-xray-manager/main/install.sh | sudo bash
 ```
 
 Ou:
 
 ```bash
-wget https://raw.githubusercontent.com/seu-usuario/azrael-xray-manager/main/install.sh
+wget https://raw.githubusercontent.com/Fabricio110916/azrael-xray-manager/main/install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
