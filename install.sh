@@ -1,9 +1,30 @@
 #!/bin/bash
 
+# Cores
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Variáveis de caminho
+XRAY_BIN="/usr/local/bin/xray"
+XRAY_DIR="/etc/xray"
+CONFIG="$XRAY_DIR/config.json"
+SERVICE="/etc/systemd/system/xray.service"
+CERT_DIR="$XRAY_DIR/cert"
+DOMAIN_FILE="$XRAY_DIR/domain.txt"
+PROTOCOL_FILE="$XRAY_DIR/protocol.txt"
+CLIENTS_FILE="$XRAY_DIR/clients.json"
+
+# COMANDO DO SISTEMA
+MENU_CMD="/usr/local/bin/xray-menu"
+
+mkdir -p "$XRAY_DIR"
+
 # Banner de login SSH - VERSÃO CORRIGIDA
 install_login_banner() {
- # echo -e "${CYAN}Configurando banner automático...${NC}"
-  
   # Limpar configurações antigas com erros primeiro
   sed -i '/if \[ -f \/etc\/profile.d\/azrael-banner.sh \]; then/,/^fi$/d' /root/.bashrc ~/.bashrc 2>/dev/null
   sed -i '/AZRAEL XRAY MANAGER/d' /root/.bashrc ~/.bashrc 2>/dev/null
@@ -82,8 +103,6 @@ EOF
 AZRAEL XRAY MANAGER
 Use: xray-menu ou xm
 EOF
-  
- # echo -e "${GREEN}✓ Banner configurado!${NC}"
 }
 
 # =========================
@@ -137,34 +156,11 @@ uninstall_script() {
   exit 0
 }
 
-XRAY_BIN="/usr/local/bin/xray"
-XRAY_DIR="/etc/xray"
-CONFIG="$XRAY_DIR/config.json"
-SERVICE="/etc/systemd/system/xray.service"
-CERT_DIR="$XRAY_DIR/cert"
-DOMAIN_FILE="$XRAY_DIR/domain.txt"
-PROTOCOL_FILE="$XRAY_DIR/protocol.txt"
-CLIENTS_FILE="$XRAY_DIR/clients.json"
-
-# COMANDO DO SISTEMA
-MENU_CMD="/usr/local/bin/xray-menu"
-
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-mkdir -p "$XRAY_DIR"
-
 # =========================
 # Instalar comando no sistema
 # =========================
 
 install_command() {
-  #echo -e "${CYAN}Instalando AZRAEL Xray Manager...${NC}"
-  
   # 1. Copiar script para /usr/local/bin
   sudo cp "$0" "$MENU_CMD"
   sudo chmod +x "$MENU_CMD"
@@ -187,7 +183,7 @@ install_command() {
 # =========================
 
 auto_install_command() {
-  if [ ! -f "$MENU_CMD" ] && [ "$0" = "./$(basename "$0")" ]; then
+  if [ ! -f "$MENU_CMD" ] && [[ "$0" == "./"* ]]; then
     clear
     printf "\033[0;35m"
     printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
@@ -207,11 +203,6 @@ auto_install_command() {
     if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
       install_command
       echo ""
-   #   echo -e "${GREEN}✅ Instalado!${NC}"
-   #   echo -e "${YELLOW}Faça logout e login${NC}"
-      echo ""
-   #   echo -e "${CYAN}Para usar:${NC}"
-    #  echo -e "${GREEN}  sudo xray-menu${NC}"
       exit 0
     else
       echo -e "${RED}Cancelado${NC}"
@@ -611,6 +602,202 @@ show_client_link() {
   echo ""
 }
 
+# =========================
+# Mostrar link VLESS
+# =========================
+show_vless_link() {
+  if [ ! -f "$CONFIG" ]; then
+    echo -e "${RED}Xray não está configurado!${NC}"
+    return 1
+  fi
+  
+  echo -e "${CYAN}=== GERAR LINK VLESS ===${NC}"
+  
+  # Obter informações da configuração
+  PORT=$(get_config_value '.inbounds[0].port')
+  CURRENT_PROTO=$(get_current_protocol)
+  TLS_MODE=$(get_tls_mode)
+  
+  if [ "$TLS_MODE" = "tls" ] && [ -f "$DOMAIN_FILE" ]; then
+    DOMAIN=$(cat "$DOMAIN_FILE")
+    echo -e "${GREEN}Modo: TLS (Domain: $DOMAIN)${NC}"
+  else
+    DOMAIN=$(curl -s --max-time 5 https://api.ipify.org || echo "IP_PÚBLICO")
+    echo -e "${YELLOW}Modo: Sem TLS (IP: $DOMAIN)${NC}"
+  fi
+  
+  echo -e "${CYAN}Protocolo: $CURRENT_PROTO${NC}"
+  echo -e "${CYAN}Porta: $PORT${NC}"
+  echo ""
+  
+  # Listar clientes para seleção
+  init_clients_file
+  local clients_count=$(jq '.clients | length' "$CLIENTS_FILE")
+  
+  if [ "$clients_count" -eq 0 ]; then
+    echo -e "${YELLOW}Nenhum cliente configurado.${NC}"
+    read -p "Deseja criar um cliente agora? (s/N): " RESPONSE
+    if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
+      add_client
+    fi
+    return
+  fi
+  
+  echo -e "${CYAN}Clientes disponíveis:${NC}"
+  echo ""
+  
+  jq -r '.clients[] | "\(.name) - \(.uuid) - \(if .enabled then "✅" else "❌" end)"' "$CLIENTS_FILE" | nl -w 2 -s ') '
+  echo ""
+  
+  read -p "Selecione o número do cliente ou digite o UUID: " CLIENT_SELECTION
+  
+  if [ -z "$CLIENT_SELECTION" ]; then
+    echo -e "${RED}Seleção cancelada${NC}"
+    return
+  fi
+  
+  # Verificar se é um número
+  if [[ "$CLIENT_SELECTION" =~ ^[0-9]+$ ]]; then
+    CLIENT_UUID=$(jq -r ".clients[$((CLIENT_SELECTION-1))].uuid" "$CLIENTS_FILE" 2>/dev/null)
+  else
+    CLIENT_UUID="$CLIENT_SELECTION"
+  fi
+  
+  if [ -z "$CLIENT_UUID" ] || [ "$CLIENT_UUID" = "null" ]; then
+    echo -e "${RED}Cliente não encontrado${NC}"
+    return
+  fi
+  
+  # Obter informações do cliente
+  CLIENT_INFO=$(jq --arg uuid "$CLIENT_UUID" '.clients[] | select(.uuid == $uuid)' "$CLIENTS_FILE")
+  
+  if [ -z "$CLIENT_INFO" ]; then
+    echo -e "${RED}Cliente não encontrado${NC}"
+    return
+  fi
+  
+  CLIENT_NAME=$(echo "$CLIENT_INFO" | jq -r '.name')
+  CLIENT_ENABLED=$(echo "$CLIENT_INFO" | jq -r '.enabled')
+  
+  if [ "$CLIENT_ENABLED" = "false" ]; then
+    echo -e "${YELLOW}Este cliente está desativado.${NC}"
+    read -p "Deseja ativá-lo? (s/N): " RESPONSE
+    if [[ "$RESPONSE" =~ ^[Ss]$ ]]; then
+      toggle_client
+    fi
+  fi
+  
+  echo ""
+  echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}LINK VLESS PARA: $CLIENT_NAME${NC}"
+  echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+  echo ""
+  
+  # Gerar link baseado no protocolo
+  if [ "$TLS_MODE" = "tls" ] && [ -f "$DOMAIN_FILE" ]; then
+    DOMAIN=$(cat "$DOMAIN_FILE")
+    
+    case $CURRENT_PROTO in
+      ws)
+        PATHX=$(get_config_value '.inbounds[0].streamSettings.wsSettings.path')
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=ws&path=${PATHX}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
+        ;;
+      xhttp)
+        PATHX=$(get_config_value '.inbounds[0].streamSettings.xhttpSettings.path')
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=xhttp&path=${PATHX}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
+        ;;
+      grpc)
+        SERVICE_NAME=$(get_config_value '.inbounds[0].streamSettings.grpcSettings.serviceName')
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=grpc&serviceName=${SERVICE_NAME}&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
+        ;;
+      tcp)
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=tcp&security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
+        ;;
+      *)
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?security=tls&sni=${DOMAIN}#${CLIENT_NAME}"
+        ;;
+    esac
+  else
+    DOMAIN=$(curl -s --max-time 5 https://api.ipify.org || echo "IP_PÚBLICO")
+    
+    case $CURRENT_PROTO in
+      ws)
+        PATHX=$(get_config_value '.inbounds[0].streamSettings.wsSettings.path')
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=ws&path=${PATHX}&security=none#${CLIENT_NAME}"
+        ;;
+      xhttp)
+        PATHX=$(get_config_value '.inbounds[0].streamSettings.xhttpSettings.path')
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=xhttp&path=${PATHX}&security=none#${CLIENT_NAME}"
+        ;;
+      grpc)
+        SERVICE_NAME=$(get_config_value '.inbounds[0].streamSettings.grpcSettings.serviceName')
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=grpc&serviceName=${SERVICE_NAME}&security=none#${CLIENT_NAME}"
+        ;;
+      tcp)
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?type=tcp&security=none#${CLIENT_NAME}"
+        ;;
+      *)
+        VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:${PORT}?security=none#${CLIENT_NAME}"
+        ;;
+    esac
+  fi
+  
+  echo -e "${CYAN}$VLESS_LINK${NC}"
+  echo ""
+  
+  # Opção para copiar ou salvar
+  echo -e "${YELLOW}Opções:${NC}"
+  echo "1) Copiar link"
+  echo "2) Salvar em arquivo"
+  echo "3) Mostrar QR Code (se disponível)"
+  echo "4) Voltar ao menu"
+  
+  read -p "Escolha uma opção [1-4]: " OPTION
+  
+  case $OPTION in
+    1)
+      if command -v xclip >/dev/null 2>&1; then
+        echo -n "$VLESS_LINK" | xclip -selection clipboard
+        echo -e "${GREEN}✓ Link copiado para a área de transferência${NC}"
+      elif command -v pbcopy >/dev/null 2>&1; then
+        echo -n "$VLESS_LINK" | pbcopy
+        echo -e "${GREEN}✓ Link copiado para a área de transferência${NC}"
+      else
+        echo -e "${YELLOW}Instale xclip para copiar automaticamente:${NC}"
+        echo -e "sudo apt install xclip"
+        echo ""
+        echo -e "${CYAN}Link acima${NC}"
+      fi
+      ;;
+    2)
+      read -p "Nome do arquivo [vless-link.txt]: " FILENAME
+      FILENAME=${FILENAME:-vless-link.txt}
+      echo "$VLESS_LINK" > "$FILENAME"
+      echo -e "${GREEN}✓ Link salvo em: $FILENAME${NC}"
+      ;;
+    3)
+      if command -v qrencode >/dev/null 2>&1; then
+        echo ""
+        qrencode -t UTF8 "$VLESS_LINK"
+        echo ""
+        echo -e "${GREEN}QR Code gerado acima${NC}"
+      else
+        echo -e "${YELLOW}Instale qrencode para gerar QR Code:${NC}"
+        echo -e "sudo apt install qrencode"
+      fi
+      ;;
+    4)
+      return
+      ;;
+    *)
+      echo -e "${RED}Opção inválida${NC}"
+      ;;
+  esac
+  
+  echo ""
+  read -p "Pressione Enter para continuar..." KEY
+}
+
 check_expired_clients() {
   init_clients_file
   
@@ -705,48 +892,53 @@ EOF
 
 select_protocol() {
   clear
-  echo "══════════════════════════════════"
-  echo "   SELECIONE O PROTOCOLO"
-  echo "══════════════════════════════════"
-  echo "1) WS (WebSocket)"
-  echo "2) XHTTP (HTTP Upgrade)"
-  echo "3) gRPC"
-  echo "4) TCP (VLESS over TCP)"
+  echo "═════════════════════════════════"
+  echo -e "${GREEN}  SELECIONAR PROTOCOLO${NC}"
+  echo "═════════════════════════════════"
+  echo ""
+  echo "1) WebSocket (WS)"
+  echo "2) gRPC"
+  echo "3) TCP"
+  echo "4) HTTP/2 (xhttp)"
   echo "0) Voltar"
   echo ""
   
-  CURRENT_PROTO=$(get_current_protocol)
-  [ -n "$CURRENT_PROTO" ] && echo -e "${CYAN}Protocolo atual: $CURRENT_PROTO${NC}\n"
+  read -p "Escolha: " PROTO_OPTION
   
-  read -p "Escolha: " proto_choice
-  
-  case $proto_choice in
-    1) setup_ws ;;
-    2) setup_xhttp ;;
-    3) setup_grpc ;;
-    4) setup_tcp ;;
-    0) return ;;
-    *) echo -e "${RED}Opção inválida${NC}"; sleep 1; select_protocol ;;
+  case $PROTO_OPTION in
+    1)
+      configure_ws
+      ;;
+    2)
+      configure_grpc
+      ;;
+    3)
+      configure_tcp
+      ;;
+    4)
+      configure_xhttp
+      ;;
+    0)
+      return
+      ;;
+    *)
+      echo -e "${RED}Opção inválida${NC}"
+      sleep 1
+      ;;
   esac
 }
 
-# =========================
-# Configurações por Protocolo
-# =========================
-
-setup_ws() {
-  echo "ws" > "$PROTOCOL_FILE"
+configure_ws() {
+  echo -e "${CYAN}Configurando WebSocket...${NC}"
   
-  read -p "Porta [80]: " PORT
-  PORT=${PORT:-80}
-  read -p "Path [/ws]: " PATHX
-  PATHX=${PATHX:-/ws}
+  read -p "Porta [443]: " PORT
+  PORT=${PORT:-443}
   
-  init_clients_file
+  read -p "Caminho WS [/vless]: " WS_PATH
+  WS_PATH=${WS_PATH:-/vless}
   
   cat >"$CONFIG" <<EOF
 {
-  "log": { "loglevel": "warning" },
   "inbounds": [
     {
       "port": $PORT,
@@ -757,107 +949,36 @@ setup_ws() {
       },
       "streamSettings": {
         "network": "ws",
-        "security": "none",
         "wsSettings": {
-          "path": "$PATHX",
-          "headers": {}
+          "path": "$WS_PATH"
         }
       }
     }
   ],
-  "outbounds": [{ "protocol": "freedom" }]
-}
-EOF
-  
-  if [ $(jq '.clients | length' "$CLIENTS_FILE") -eq 0 ]; then
-    DEFAULT_UUID=$(uuidgen)
-    jq --arg uuid "$DEFAULT_UUID" \
-       '.clients = [{
-          "name": "default",
-          "uuid": $uuid,
-          "email": "default@xray.local",
-          "data_limit": 0,
-          "expire_date": "",
-          "created_at": "'$(date +%Y-%m-%d)'",
-          "enabled": true,
-          "used_bytes": 0
-       }]' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  fi
-  
-  update_xray_config
-  
-  echo -e "${GREEN}Protocolo WS configurado${NC}"
-  systemctl enable --now xray 2>/dev/null && echo -e "${GREEN}Xray iniciado${NC}"
-}
-
-setup_xhttp() {
-  echo "xhttp" > "$PROTOCOL_FILE"
-  
-  read -p "Porta [80]: " PORT
-  PORT=${PORT:-80}
-  read -p "Path [/vless]: " PATHX
-  PATHX=${PATHX:-/vless}
-  
-  init_clients_file
-  
-  cat >"$CONFIG" <<EOF
-{
-  "log": { "loglevel": "warning" },
-  "inbounds": [
+  "outbounds": [
     {
-      "port": $PORT,
-      "protocol": "vless",
-      "settings": {
-        "clients": [],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "none",
-        "xhttpSettings": {
-          "path": "$PATHX"
-        }
-      }
+      "protocol": "freedom",
+      "settings": {}
     }
-  ],
-  "outbounds": [{ "protocol": "freedom" }]
+  ]
 }
 EOF
   
-  if [ $(jq '.clients | length' "$CLIENTS_FILE") -eq 0 ]; then
-    DEFAULT_UUID=$(uuidgen)
-    jq --arg uuid "$DEFAULT_UUID" \
-       '.clients = [{
-          "name": "default",
-          "uuid": $uuid,
-          "email": "default@xray.local",
-          "data_limit": 0,
-          "expire_date": "",
-          "created_at": "'$(date +%Y-%m-%d)'",
-          "enabled": true,
-          "used_bytes": 0
-       }]' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  fi
-  
-  update_xray_config
-  
-  echo -e "${GREEN}Protocolo XHTTP configurado${NC}"
-  systemctl enable --now xray 2>/dev/null && echo -e "${GREEN}Xray iniciado${NC}"
+  echo "ws" > "$PROTOCOL_FILE"
+  echo -e "${GREEN}WebSocket configurado${NC}"
 }
 
-setup_grpc() {
-  echo "grpc" > "$PROTOCOL_FILE"
+configure_grpc() {
+  echo -e "${CYAN}Configurando gRPC...${NC}"
   
   read -p "Porta [443]: " PORT
   PORT=${PORT:-443}
-  read -p "Service Name [grpc]: " SERVICE_NAME
-  SERVICE_NAME=${SERVICE_NAME:-grpc}
   
-  init_clients_file
+  read -p "Service Name [GrpcService]: " SERVICE_NAME
+  SERVICE_NAME=${SERVICE_NAME:-GrpcService}
   
   cat >"$CONFIG" <<EOF
 {
-  "log": { "loglevel": "warning" },
   "inbounds": [
     {
       "port": $PORT,
@@ -868,49 +989,33 @@ setup_grpc() {
       },
       "streamSettings": {
         "network": "grpc",
-        "security": "none",
         "grpcSettings": {
           "serviceName": "$SERVICE_NAME"
         }
       }
     }
   ],
-  "outbounds": [{ "protocol": "freedom" }]
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
 }
 EOF
   
-  if [ $(jq '.clients | length' "$CLIENTS_FILE") -eq 0 ]; then
-    DEFAULT_UUID=$(uuidgen)
-    jq --arg uuid "$DEFAULT_UUID" \
-       '.clients = [{
-          "name": "default",
-          "uuid": $uuid,
-          "email": "default@xray.local",
-          "data_limit": 0,
-          "expire_date": "",
-          "created_at": "'$(date +%Y-%m-%d)'",
-          "enabled": true,
-          "used_bytes": 0
-       }]' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  fi
-  
-  update_xray_config
-  
-  echo -e "${GREEN}Protocolo gRPC configurado${NC}"
-  systemctl enable --now xray 2>/dev/null && echo -e "${GREEN}Xray iniciado${NC}"
+  echo "grpc" > "$PROTOCOL_FILE"
+  echo -e "${GREEN}gRPC configurado${NC}"
 }
 
-setup_tcp() {
-  echo "tcp" > "$PROTOCOL_FILE"
+configure_tcp() {
+  echo -e "${CYAN}Configurando TCP...${NC}"
   
   read -p "Porta [443]: " PORT
   PORT=${PORT:-443}
   
-  init_clients_file
-  
   cat >"$CONFIG" <<EOF
 {
-  "log": { "loglevel": "warning" },
   "inbounds": [
     {
       "port": $PORT,
@@ -920,310 +1025,372 @@ setup_tcp() {
         "decryption": "none"
       },
       "streamSettings": {
-        "network": "tcp",
-        "security": "none",
-        "tcpSettings": {}
+        "network": "tcp"
       }
     }
   ],
-  "outbounds": [{ "protocol": "freedom" }]
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
 }
 EOF
   
-  if [ $(jq '.clients | length' "$CLIENTS_FILE") -eq 0 ]; then
-    DEFAULT_UUID=$(uuidgen)
-    jq --arg uuid "$DEFAULT_UUID" \
-       '.clients = [{
-          "name": "default",
-          "uuid": $uuid,
-          "email": "default@xray.local",
-          "data_limit": 0,
-          "expire_date": "",
-          "created_at": "'$(date +%Y-%m-%d)'",
-          "enabled": true,
-          "used_bytes": 0
-       }]' "$CLIENTS_FILE" > /tmp/clients.json && mv /tmp/clients.json "$CLIENTS_FILE"
-  fi
+  echo "tcp" > "$PROTOCOL_FILE"
+  echo -e "${GREEN}TCP configurado${NC}"
+}
+
+configure_xhttp() {
+  echo -e "${CYAN}Configurando HTTP/2 (xhttp)...${NC}"
   
-  update_xray_config
+  read -p "Porta [443]: " PORT
+  PORT=${PORT:-443}
   
-  echo -e "${GREEN}Protocolo TCP configurado${NC}"
-  systemctl enable --now xray 2>/dev/null && echo -e "${GREEN}Xray iniciado${NC}"
+  read -p "Caminho [/h2]: " H2_PATH
+  H2_PATH=${H2_PATH:-/h2}
+  
+  cat >"$CONFIG" <<EOF
+{
+  "inbounds": [
+    {
+      "port": $PORT,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {
+          "path": "$H2_PATH"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
+EOF
+  
+  echo "xhttp" > "$PROTOCOL_FILE"
+  echo -e "${GREEN}HTTP/2 configurado${NC}"
 }
 
 # =========================
 # Configurar TLS
 # =========================
 
+configure_tls() {
+  clear
+  echo "═════════════════════════════════"
+  echo -e "${GREEN}  CONFIGURAR TLS${NC}"
+  echo "═════════════════════════════════"
+  echo ""
+  echo "1) Configurar TLS com domínio"
+  echo "2) Remover TLS"
+  echo "0) Voltar"
+  echo ""
+  
+  read -p "Escolha: " TLS_OPTION
+  
+  case $TLS_OPTION in
+    1)
+      setup_tls
+      ;;
+    2)
+      remove_tls
+      ;;
+    0)
+      return
+      ;;
+    *)
+      echo -e "${RED}Opção inválida${NC}"
+      sleep 1
+      ;;
+  esac
+}
+
 setup_tls() {
+  if [ ! -f "$CONFIG" ]; then
+    echo -e "${RED}Configure primeiro um protocolo${NC}"
+    return
+  fi
+  
   echo -e "${CYAN}=== CONFIGURAR TLS ===${NC}"
   
-  if [ ! -f "$CONFIG" ]; then
-    echo -e "${RED}Configure primeiro o protocolo${NC}"
-    return
-  fi
+  read -p "Domínio (ex: exemplo.com): " DOMAIN
+  [ -z "$DOMAIN" ] && { echo -e "${RED}Domínio obrigatório${NC}"; return; }
   
-  CURRENT_PROTO=$(get_current_protocol)
-  echo -e "Protocolo atual: ${CYAN}$CURRENT_PROTO${NC}"
-  
-  read -p "Domínio (ex: seu.dominio.com): " DOMAIN
-  
-  if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Domínio é obrigatório${NC}"
-    return
-  fi
-  
+  echo -e "${CYAN}Verificando DNS...${NC}"
   check_domain_dns "$DOMAIN" || return
   
-  echo "$DOMAIN" > "$DOMAIN_FILE"
+  echo -e "${CYAN}Instalando certificado SSL...${NC}"
   
+  # Instalar acme.sh se necessário
+  if [ ! -d "/root/.acme.sh" ]; then
+    apt update -y
+    apt install -y socat
+    curl https://get.acme.sh | sh -s email=admin@$DOMAIN
+    source ~/.bashrc
+  fi
+  
+  # Limpar certificados antigos
   clean_old_certificates "$DOMAIN"
   
-  if [ ! -f "/root/.acme.sh/acme.sh" ]; then
-    echo -e "${CYAN}Instalando ACME.sh...${NC}"
-    curl https://get.acme.sh | sh -s email=admin@$DOMAIN
-    source ~/.bashrc 2>/dev/null
-  fi
+  # Gerar novo certificado
+  /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256
   
-  echo -e "${CYAN}Obtendo certificado...${NC}"
-  
-  mkdir -p "$CERT_DIR"
-  
-  systemctl stop nginx apache2 2>/dev/null || true
-  
-  if /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256; then
-    echo -e "${GREEN}✓ Certificado obtido${NC}"
-    
-    /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-      --fullchain-file "$CERT_DIR/fullchain.crt" \
-      --key-file "$CERT_DIR/privkey.key"
-    
-    jq '.inbounds[0].streamSettings.security = "tls"' "$CONFIG" > /tmp/config.json
-    mv /tmp/config.json "$CONFIG"
-    
-    jq --arg domain "$DOMAIN" \
-       --arg cert "$CERT_DIR/fullchain.crt" \
-       --arg key "$CERT_DIR/privkey.key" \
-       '.inbounds[0].streamSettings.tlsSettings = {
-          "certificates": [
-            {
-              "certificateFile": $cert,
-              "keyFile": $key
-            }
-          ],
-          "alpn": ["http/1.1"]
-        }' "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-    
-    CURRENT_PORT=$(jq -r '.inbounds[0].port' "$CONFIG")
-    if [ "$CURRENT_PORT" != "443" ]; then
-      read -p "Alterar porta para 443? (s/N): " CHANGE_PORT
-      if [[ "$CHANGE_PORT" =~ ^[Ss]$ ]]; then
-        jq '.inbounds[0].port = 443' "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-        echo -e "${GREEN}Porta alterada para 443${NC}"
-      fi
-    fi
-    
-    update_xray_config
-    
-    echo -e "${GREEN}✓ TLS configurado para $DOMAIN${NC}"
-    
-  else
-    echo -e "${RED}Falha ao obter certificado${NC}"
-    return 1
-  fi
-}
-
-# =========================
-# Remover TLS
-# =========================
-
-remove_tls() {
-  echo -e "${CYAN}=== REMOVER TLS ===${NC}"
-  
-  if [ ! -f "$CONFIG" ]; then
-    echo -e "${RED}Configuração não encontrada${NC}"
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Falha ao gerar certificado${NC}"
     return
   fi
   
-  jq 'del(.inbounds[0].streamSettings.tlsSettings)' "$CONFIG" > /tmp/config.json
-  mv /tmp/config.json "$CONFIG"
+  # Criar diretório para certificados
+  mkdir -p "$CERT_DIR"
   
-  jq '.inbounds[0].streamSettings.security = "none"' "$CONFIG" > /tmp/config.json
-  mv /tmp/config.json "$CONFIG"
+  # Instalar certificado
+  /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+    --fullchain-file "$CERT_DIR/fullchain.pem" \
+    --key-file "$CERT_DIR/privkey.pem"
   
+  # Salvar domínio
+  echo "$DOMAIN" > "$DOMAIN_FILE"
+  
+  # Atualizar configuração Xray
+  update_config_with_tls "$DOMAIN"
+  
+  echo -e "${GREEN}TLS configurado com sucesso!${NC}"
+  echo -e "Domínio: $DOMAIN"
+  echo -e "Certificados em: $CERT_DIR/"
+}
+
+update_config_with_tls() {
+  local domain="$1"
+  
+  # Ler configuração atual
+  if [ ! -f "$CONFIG" ]; then
+    return
+  fi
+  
+  # Adicionar TLS à configuração
+  jq --arg domain "$domain" \
+     '.inbounds[0].streamSettings.security = "tls" |
+      .inbounds[0].streamSettings.tlsSettings = {
+        "certificates": [
+          {
+            "certificateFile": "'"$CERT_DIR/fullchain.pem"'",
+            "keyFile": "'"$CERT_DIR/privkey.pem"'"
+          }
+        ]
+      } |
+      .inbounds[0].streamSettings.realitySettings = null' \
+     "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
+  
+  # Reiniciar Xray se estiver rodando
+  if systemctl is-active --quiet xray; then
+    systemctl restart xray
+  fi
+}
+
+remove_tls() {
+  if [ ! -f "$CONFIG" ]; then
+    return
+  fi
+  
+  echo -e "${CYAN}Removendo TLS...${NC}"
+  
+  # Remover configurações TLS
+  jq '.inbounds[0].streamSettings.security = "none" |
+      .inbounds[0].streamSettings.tlsSettings = null |
+      .inbounds[0].streamSettings.realitySettings = null' \
+     "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
+  
+  # Remover arquivos de domínio
   rm -f "$DOMAIN_FILE" 2>/dev/null
-  rm -rf "$CERT_DIR" 2>/dev/null
   
-  update_xray_config
+  # Reiniciar Xray se estiver rodando
+  if systemctl is-active --quiet xray; then
+    systemctl restart xray
+  fi
   
-  echo -e "${GREEN}✓ TLS removido${NC}"
+  echo -e "${GREEN}TLS removido${NC}"
 }
 
 # =========================
-# Mostrar Status
+# Gerenciar Clientes
+# =========================
+
+manage_clients() {
+  while true; do
+    clear
+    echo "═════════════════════════════════"
+    echo -e "${GREEN}  GERENCIAR CLIENTES${NC}"
+    echo "═════════════════════════════════"
+    echo ""
+    echo "1) Adicionar cliente"
+    echo "2) Listar clientes"
+    echo "3) Deletar cliente"
+    echo "4) Ativar/Desativar cliente"
+    echo "5) Atualizar data de expiração"
+    echo "6) Atualizar limite de dados"
+    echo "7) Verificar clientes expirados"
+    echo "0) Voltar"
+    echo ""
+    
+    read -p "Escolha: " CLIENT_OPTION
+    
+    case $CLIENT_OPTION in
+      1) add_client;;
+      2) list_clients;;
+      3) delete_client;;
+      4) toggle_client;;
+      5) update_client_expiry;;
+      6) update_client_limit;;
+      7) check_expired_clients;;
+      0) return;;
+      *) echo -e "${RED}Opção inválida${NC}"; sleep 1;;
+    esac
+    
+    [ "$CLIENT_OPTION" != "0" ] && read -p "Pressione Enter para continuar..." KEY
+  done
+}
+
+# =========================
+# Ver Status
 # =========================
 
 show_status() {
-  echo -e "${CYAN}=== STATUS ===${NC}"
+  clear
+  echo "═════════════════════════════════"
+  echo -e "${GREEN}  STATUS DO SISTEMA${NC}"
+  echo "═════════════════════════════════"
+  echo ""
   
-  if [ -f "$XRAY_BIN" ]; then
-    XRAY_VERSION=$("$XRAY_BIN" version | head -1 | awk '{print $2}')
-    echo -e "Xray Core: ${GREEN}$XRAY_VERSION${NC}"
-  else
-    echo -e "Xray Core: ${RED}Não instalado${NC}"
-  fi
-  
+  # Status do Xray
   if systemctl is-active --quiet xray; then
-    echo -e "Serviço Xray: ${GREEN}ATIVO${NC}"
+    echo -e "Xray: ${GREEN}● ATIVO${NC}"
   else
-    echo -e "Serviço Xray: ${RED}INATIVO${NC}"
+    echo -e "Xray: ${RED}● INATIVO${NC}"
   fi
   
-  if [ -f "$CONFIG" ]; then
-    CURRENT_PROTO=$(get_current_protocol)
-    TLS_MODE=$(get_tls_mode)
-    PORT=$(get_config_value '.inbounds[0].port' 2>/dev/null || echo "N/A")
-    
-    echo -e "Protocolo: ${CYAN}$CURRENT_PROTO${NC}"
-    echo -e "Porta: ${CYAN}$PORT${NC}"
-    echo -e "TLS: ${CYAN}$TLS_MODE${NC}"
-    
-    if [ "$TLS_MODE" = "tls" ] && [ -f "$DOMAIN_FILE" ]; then
-      DOMAIN=$(cat "$DOMAIN_FILE" 2>/dev/null)
+  # Informações do serviço
+  if [ -f "$SERVICE" ]; then
+    echo -e "Serviço: ${GREEN}Instalado${NC}"
+  else
+    echo -e "Serviço: ${RED}Não instalado${NC}"
+  fi
+  
+  # Protocolo atual
+  PROTOCOL=$(get_current_protocol)
+  if [ -n "$PROTOCOL" ]; then
+    echo -e "Protocolo: ${CYAN}$PROTOCOL${NC}"
+  else
+    echo -e "Protocolo: ${RED}Não configurado${NC}"
+  fi
+  
+  # TLS
+  TLS_MODE=$(get_tls_mode)
+  if [ "$TLS_MODE" = "tls" ]; then
+    echo -e "TLS: ${GREEN}Ativado${NC}"
+    if [ -f "$DOMAIN_FILE" ]; then
+      DOMAIN=$(cat "$DOMAIN_FILE")
       echo -e "Domínio: ${CYAN}$DOMAIN${NC}"
     fi
-    
-    if [ -f "$CLIENTS_FILE" ]; then
-      TOTAL_CLIENTS=$(jq '.clients | length' "$CLIENTS_FILE")
-      ACTIVE_CLIENTS=$(jq '[.clients[] | select(.enabled == true)] | length' "$CLIENTS_FILE")
-      echo -e "Clientes: ${CYAN}$ACTIVE_CLIENTS/$TOTAL_CLIENTS ativos${NC}"
-    fi
-    
   else
-    echo -e "Configuração: ${RED}Não configurada${NC}"
+    echo -e "TLS: ${YELLOW}Desativado${NC}"
+  fi
+  
+  # Clientes
+  if [ -f "$CLIENTS_FILE" ]; then
+    CLIENT_COUNT=$(jq '.clients | length' "$CLIENTS_FILE")
+    ACTIVE_COUNT=$(jq '[.clients[] | select(.enabled == true)] | length' "$CLIENTS_FILE")
+    echo -e "Clientes: ${CYAN}$ACTIVE_COUNT/$CLIENT_COUNT ativos${NC}"
+  else
+    echo -e "Clientes: ${YELLOW}0${NC}"
+  fi
+  
+  # Porta
+  if [ -f "$CONFIG" ]; then
+    PORT=$(get_config_value '.inbounds[0].port')
+    echo -e "Porta: ${CYAN}$PORT${NC}"
+  fi
+  
+  # Uso de memória
+  if systemctl is-active --quiet xray; then
+    XRAY_PID=$(systemctl show --property=MainPID xray | cut -d= -f2)
+    if [ "$XRAY_PID" -ne 0 ]; then
+      MEM_USAGE=$(ps -o rss= -p "$XRAY_PID" | awk '{printf "%.1f", $1/1024}')
+      echo -e "Uso de memória: ${CYAN}${MEM_USAGE}MB${NC}"
+    fi
   fi
   
   echo ""
+  echo "═════════════════════════════════"
+  echo -e "${YELLOW}Comandos úteis:${NC}"
+  echo "systemctl status xray"
+  echo "systemctl restart xray"
+  echo "journalctl -u xray -f"
+  echo ""
+  
+  read -p "Pressione Enter para voltar..." KEY
 }
 
 # =========================
 # Menu Principal
 # =========================
 
-show_menu() {
-  clear
-  echo -e "\033[1;36m"
-  echo "╔════════════════════════════════════════════╗"
-  echo "║        AZRAEL XRAY MANAGER v2.0           ║"
-  echo "╚════════════════════════════════════════════╝"
-  echo -e "\033[0m"
-  
-  show_status
-  
-  echo -e "${BLUE}══════════════════════════════════════════════${NC}"
-  echo -e "${CYAN}1) Instalar/Atualizar Xray Core${NC}"
-  echo -e "${CYAN}2) Configurar Protocolo${NC}"
-  echo -e "${CYAN}3) Configurar TLS (HTTPS)${NC}"
-  echo -e "${CYAN}4) Remover TLS${NC}"
-  echo -e "${BLUE}══════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}5) Gerenciar Clientes${NC}"
-  echo -e "${GREEN}6) Ver Status${NC}"
-  echo -e "${GREEN}7) Reiniciar Xray${NC}"
-  echo -e "${BLUE}══════════════════════════════════════════════${NC}"
-  echo -e "${YELLOW}8) Verificar Clientes Expirados${NC}"
-  echo -e "${YELLOW}X) Desinstalar script${NC}"
-  echo -e "${YELLOW}0) Sair${NC}"
-  echo -e "${BLUE}══════════════════════════════════════════════${NC}"
-  echo ""
-}
-
-# Submenu de Clientes
-show_client_menu() {
-  clear
-  echo -e "${CYAN}╔════════════════════════════════════════════╗${NC}"
-  echo -e "${CYAN}║         GERENCIAMENTO DE CLIENTES          ║${NC}"
-  echo -e "${CYAN}╚════════════════════════════════════════════╝${NC}"
-  echo ""
-  echo -e "1) Adicionar Novo Cliente"
-  echo -e "2) Listar Todos os Clientes"
-  echo -e "3) Gerar Link para Cliente"
-  echo -e "4) Ativar/Desativar Cliente"
-  echo -e "5) Atualizar Limite de Dados"
-  echo -e "6) Atualizar Data de Expiração"
-  echo -e "7) Deletar Cliente"
-  echo -e "0) Voltar ao Menu Principal"
-  echo ""
-}
-
-# =========================
-# Loop Principal
-# =========================
-
 main_menu() {
   while true; do
-    show_menu
+    clear
+    echo "═══════════════════════════════════════════════"
+    printf "\033[0;35m"
+    printf ' █████╗ ███████╗██████╗  █████╗ ███████╗██╗\n'
+    printf '██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██╔════╝██║\n'
+    printf '███████║  ███╔╝ ██████╔╝███████║█████╗  ██║\n'
+    printf '██╔══██║ ███╔╝  ██╔══██╗██╔══██║██╔══╝  ██║\n'
+    printf '██║  ██║███████╗██║  ██║██║  ██║███████╗███████╗\n'
+    printf '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝\n'
+    printf "\033[0m"
+    echo "═══════════════════════════════════════════════"
+    echo -e "${GREEN}          AZRAEL XRAY MANAGER${NC}"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    echo "1) Instalar Xray Core"
+    echo "2) Configurar protocolo"
+    echo "3) Configurar TLS"
+    echo "4) Gerenciar clientes"
+    echo "5) Ver status"
+    echo "6) Ver link VLESS"
+    echo "7) Desinstalar tudo"
+    echo "0) Sair"
+    echo ""
     
-    read -p "Escolha uma opção: " choice
+    read -p "Escolha uma opção [0-7]: " OPTION
     
-    case $choice in
-      1) 
-        install_xray_core
-        read -p "Enter para continuar..." ;;
-      2) 
-        select_protocol
-        read -p "Enter para continuar..." ;;
-      3) 
-        setup_tls
-        read -p "Enter para continuar..." ;;
-      4) 
-        remove_tls
-        read -p "Enter para continuar..." ;;
-      5)
-        while true; do
-          show_client_menu
-          read -p "Escolha: " client_choice
-          case $client_choice in
-            1) add_client ;;
-            2) list_clients ;;
-            3) show_client_link ;;
-            4) toggle_client ;;
-            5) update_client_limit ;;
-            6) update_client_expiry ;;
-            7) delete_client ;;
-            0) break ;;
-            *) echo -e "${RED}Opção inválida${NC}" ;;
-          esac
-          echo ""
-          read -p "Enter para continuar..."
-        done ;;
-      6) 
-        show_status
-        read -p "Enter para continuar..." ;;
-      7) 
-        systemctl restart xray
-        echo -e "${GREEN}Xray reiniciado${NC}"
-        sleep 2 ;;
-      8) 
-        check_expired_clients
-        read -p "Enter para continuar..." ;;
-      x|X)
-        uninstall_script ;;
-      0) 
-        echo -e "${GREEN}Saindo...${NC}"
-        exit 0 ;;
-      *)
-        echo -e "${RED}Opção inválida${NC}"
-        sleep 1 ;;
+    case $OPTION in
+      1) install_xray_core;;
+      2) select_protocol;;
+      3) configure_tls;;
+      4) manage_clients;;
+      5) show_status;;
+      6) show_vless_link;;
+      7) uninstall_script;;
+      0) exit 0;;
+      *) echo -e "${RED}Opção inválida${NC}"; sleep 1;;
     esac
+    
+    [ "$OPTION" != "0" ] && [ "$OPTION" != "6" ] && read -p "Pressione Enter para continuar..." KEY
   done
 }
 
 # =========================
-# Iniciar
+# Executar
 # =========================
 
-if [ -f "$MENU_CMD" ] && [ "$0" = "$MENU_CMD" ]; then
-  main_menu
-elif [ -f "$MENU_CMD" ] && [[ "$0" =~ /xm$ ]]; then
-  main_menu
-fi
+main_menu
