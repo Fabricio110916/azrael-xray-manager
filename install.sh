@@ -1136,6 +1136,7 @@ setup_tls() {
   if [ ! -d "/root/.acme.sh" ]; then
     apt update -y
     apt install -y socat
+    echo -e "${CYAN}Instalando acme.sh...${NC}"
     curl https://get.acme.sh | sh -s email=admin@$DOMAIN
     source ~/.bashrc
   fi
@@ -1143,12 +1144,31 @@ setup_tls() {
   # Limpar certificados antigos
   clean_old_certificates "$DOMAIN"
   
-  # Gerar novo certificado
-  /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256
+  # CORREÇÃO: Registrar conta no ZeroSSL com e-mail válido
+  echo -e "${CYAN}Registrando conta no ZeroSSL...${NC}"
+  if ! /root/.acme.sh/acme.sh --list-account 2>/dev/null | grep -q "ACCOUNT_THUMBPRINT"; then
+    # Gerar e-mail automático se não existir
+    RANDOM_EMAIL="admin-$(date +%s)@$DOMAIN"
+    /root/.acme.sh/acme.sh --register-account -m "$RANDOM_EMAIL" --server zerossl
+  fi
   
-  if [ $? -ne 0 ]; then
+  # Emitir certificado
+  echo -e "${CYAN}Emitindo certificado para $DOMAIN...${NC}"
+  
+  # Parar serviços que possam estar usando a porta 80/443
+  systemctl stop nginx 2>/dev/null || true
+  systemctl stop apache2 2>/dev/null || true
+  
+  # Tentar emitir certificado
+  if ! /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256; then
     echo -e "${RED}Falha ao gerar certificado${NC}"
-    return
+    echo -e "${YELLOW}Tentando alternativa com Let's Encrypt...${NC}"
+    
+    # Tentar com Let's Encrypt
+    if ! /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --server letsencrypt; then
+      echo -e "${RED}Falha ao gerar certificado com Let's Encrypt também${NC}"
+      return
+    fi
   fi
   
   # Criar diretório para certificados
@@ -1157,7 +1177,10 @@ setup_tls() {
   # Instalar certificado
   /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
     --fullchain-file "$CERT_DIR/fullchain.pem" \
-    --key-file "$CERT_DIR/privkey.pem"
+    --key-file "$CERT_DIR/privkey.pem" || {
+    echo -e "${RED}Falha ao instalar certificado${NC}"
+    return
+  }
   
   # Salvar domínio
   echo "$DOMAIN" > "$DOMAIN_FILE"
@@ -1168,6 +1191,10 @@ setup_tls() {
   echo -e "${GREEN}TLS configurado com sucesso!${NC}"
   echo -e "Domínio: $DOMAIN"
   echo -e "Certificados em: $CERT_DIR/"
+  
+  # Reiniciar serviços parados
+  systemctl start nginx 2>/dev/null || true
+  systemctl start apache2 2>/dev/null || true
 }
 
 update_config_with_tls() {
